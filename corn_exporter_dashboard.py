@@ -19,6 +19,8 @@ import numpy as np
 import plotly.graph_objects as go
 import base64
 import os
+import shutil
+import tempfile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
@@ -206,7 +208,25 @@ def _add_chart_watermark(fig: go.Figure, logo_b64: str | None) -> go.Figure:
 @st.cache_data(show_spinner=False)
 def load_data(commodity: str) -> pd.DataFrame:
     cfg = COMMODITY_CONFIG[commodity]
-    df  = pd.read_excel(EXCEL_PATH, sheet_name=cfg["sheet"], header=0)
+
+    # Copy to a temp file first so a locked/open Excel workbook on Windows
+    # doesn't cause a PermissionError or a stale read.
+    tmp_path = None
+    try:
+        tmp_path = tempfile.mktemp(suffix=".xlsx")
+        shutil.copy2(EXCEL_PATH, tmp_path)
+        read_path = tmp_path
+    except Exception:
+        read_path = EXCEL_PATH   # fall back to reading directly
+
+    try:
+        df = pd.read_excel(read_path, sheet_name=cfg["sheet"], header=0)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
     n   = len(cfg["col_names"])
     df  = df.iloc[:, :n].copy()
     df.columns = cfg["col_names"]
@@ -717,55 +737,94 @@ def _pct_chip(val, label) -> str:
     return f'<span style="color:{color};font-weight:700;">{label}&thinsp;{sign}{val:.1f}%</span>'
 
 
-def _single_tile(t, row, unit_short, unit_decimals) -> str:
-    accent = t.get("accent", JSA_CYAN)
-    if row == "monthly":
-        val, pct_ly, pct_oly = t["monthly_val"], t["pct_ly_m"], t["pct_oly_m"]
-        sub_line = (f'<span style="color:#5a6878;">{t["latest_month"]}</span>'
-                    f'&nbsp;·&nbsp;<span style="color:#445060;">{t["cy"]}</span>')
-        type_tag = ""
-    else:
-        val, pct_ly, pct_oly = t["cum_val"], t["pct_ly_c"], t["pct_oly_c"]
-        sub_line = (f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>'
-                    f'&nbsp;·&nbsp;<span style="color:#445060;">'
-                    f'{t["cy"]}&nbsp;({t["my_label"]})</span>')
-        type_tag = (f'<span style="font-size:9px;font-weight:700;color:{accent};'
-                    f'text-transform:uppercase;letter-spacing:0.5px;">MYTD</span>&nbsp;')
+def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
+    """
+    Render stat tiles as unified per-country cards (Monthly + MYTD seamlessly
+    stacked inside one card), all cards flush against each other and centred.
+    """
+    cards_html = ""
+    total      = sum(1 for t in tiles if t is not None)
+    idx        = 0   # position among non-None tiles
 
-    vol_str  = fmt_num(val, unit_decimals) if val is not None else "—"
-    imp_note = (' <span style="font-size:9px;color:#888;">(imports)</span>'
-                if t.get("is_import") else "")
+    for t in tiles:
+        if t is None:
+            continue
+
+        accent   = t.get("accent", JSA_CYAN)
+        imp_note = (' <span style="font-size:9px;color:#8a9aaa;font-weight:400;">'
+                    '(imports)</span>'
+                    if t.get("is_import") else "")
+
+        # rounded corners only on the outer edges of the first/last card
+        br_tl = "6px" if idx == 0 else "0"
+        br_bl = "6px" if idx == 0 else "0"
+        br_tr = "6px" if idx == total - 1 else "0"
+        br_br = "6px" if idx == total - 1 else "0"
+        border_radius = f"{br_tl} {br_tr} {br_br} {br_bl}"
+
+        # right border only on non-last cards (avoids double border)
+        right_border = "" if idx == total - 1 else "border-right:1px solid #2e353d;"
+
+        m_vol = fmt_num(t["monthly_val"], unit_decimals) if t["monthly_val"] is not None else "—"
+        c_vol = fmt_num(t["cum_val"],     unit_decimals) if t["cum_val"]     is not None else "—"
+
+        card = (
+            # ── outer card ──────────────────────────────────────────────────
+            f'<div style="flex:1;min-width:140px;background:#21262c;'
+            f'border-top:3px solid {accent};'
+            f'border-bottom:1px solid #2e353d;border-left:1px solid #2e353d;'
+            f'{right_border}'
+            f'border-radius:{border_radius};overflow:hidden;">'
+
+            # ── country header ───────────────────────────────────────────────
+            f'<div style="text-align:center;font-size:10.5px;font-weight:700;'
+            f'color:#ffffff;text-transform:uppercase;letter-spacing:0.7px;'
+            f'padding:6px 8px 5px;background:#1a1e22;'
+            f'border-bottom:1px solid #2e353d;">'
+            f'{t["label"]}{imp_note}</div>'
+
+            # ── monthly section ──────────────────────────────────────────────
+            f'<div style="padding:9px 10px 8px;text-align:center;">'
+            f'<div style="font-size:8.5px;font-weight:700;color:#5a6878;'
+            f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">Monthly</div>'
+            f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
+            f'line-height:1.1;font-family:Arial;">{m_vol}</div>'
+            f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
+            f'{unit_short}&nbsp;·&nbsp;'
+            f'<span style="color:#5a6878;">{t["latest_month"]}</span>'
+            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}</span></div>'
+            f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
+            f'{_pct_chip(t["pct_ly_m"],"LY")}&nbsp;{_pct_chip(t["pct_oly_m"],"Avg")}'
+            f'</div></div>'
+
+            # ── divider ──────────────────────────────────────────────────────
+            f'<div style="border-top:1px solid #2e353d;margin:0;"></div>'
+
+            # ── MYTD section ─────────────────────────────────────────────────
+            f'<div style="padding:9px 10px 8px;text-align:center;">'
+            f'<div style="font-size:8.5px;font-weight:700;color:{accent};'
+            f'text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">MYTD</div>'
+            f'<div style="color:{JSA_CYAN};font-size:19px;font-weight:700;'
+            f'line-height:1.1;font-family:Arial;">{c_vol}</div>'
+            f'<div style="font-size:9px;color:#3d4a58;margin:2px 0 5px;">'
+            f'{unit_short}&nbsp;·&nbsp;'
+            f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>'
+            f'&nbsp;<span style="color:#3d4a58;">{t["cy"]}&nbsp;({t["my_label"]})</span></div>'
+            f'<div style="font-size:9.5px;display:flex;gap:6px;justify-content:center;">'
+            f'{_pct_chip(t["pct_ly_c"],"LY")}&nbsp;{_pct_chip(t["pct_oly_c"],"Avg")}'
+            f'</div></div>'
+
+            f'</div>'  # close card
+        )
+        cards_html += card
+        idx += 1
 
     return (
-        f'<div style="flex:1;min-width:145px;max-width:220px;background:#21262c;'
-        f'border-radius:8px;padding:13px 14px 11px;border:1px solid #2e353d;'
-        f'border-top:3px solid {accent};text-align:center;">'
-        f'<div style="color:#8a9aaa;font-size:10.5px;font-weight:700;'
-        f'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;">'
-        f'{type_tag}{t["label"]}{imp_note}</div>'
-        f'<div style="color:{JSA_CYAN};font-size:23px;font-weight:700;'
-        f'line-height:1.1;font-family:Arial;">{vol_str}</div>'
-        f'<div style="font-size:10px;margin:2px 0 7px;color:#3d4a58;">'
-        f'{unit_short}&nbsp;·&nbsp;{sub_line}</div>'
-        f'<div style="font-size:10.5px;display:flex;gap:10px;justify-content:center;">'
-        f'{_pct_chip(pct_ly,"LY")}{_pct_chip(pct_oly,"Avg")}</div>'
-        f'</div>'
-    )
-
-
-def _tile_row(tiles, row, unit_short, unit_decimals, heading) -> str:
-    inner = "".join(
-        _single_tile(t, row, unit_short, unit_decimals) if t else
-        '<div style="flex:1;min-width:145px;"></div>'
-        for t in tiles
-    )
-    return (
-        f'<div style="font-family:Arial;margin-bottom:10px;text-align:center;">'
-        f'<div style="font-size:10px;font-weight:700;color:#5a6878;'
-        f'text-transform:uppercase;letter-spacing:0.8px;margin-bottom:7px;">'
-        f'{heading}</div>'
-        f'<div style="display:flex;gap:8px;flex-wrap:nowrap;justify-content:center;">'
-        f'{inner}</div></div>'
+        f'<div style="font-family:Arial;margin-bottom:14px;'
+        f'display:flex;justify-content:center;">'
+        f'<div style="display:flex;flex-wrap:nowrap;width:fit-content;">'
+        f'{cards_html}'
+        f'</div></div>'
     )
 
 
@@ -811,18 +870,10 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # ── Stat tiles ────────────────────────────────────────────────────────
     tile_stats = _compute_tile_stats(df, use_bushels, unit_factor, cfg,
                                      arbr_oct_sep=arbr_oct_sep)
+    st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
+                unsafe_allow_html=True)
     st.markdown(
-        _tile_row(tile_stats, "monthly", unit_short, unit_decimals,
-                  f"Most Recent Monthly Shipments  ({unit_short})"),
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        _tile_row(tile_stats, "cumulative", unit_short, unit_decimals,
-                  f"Marketing Year-to-Date Cumulative Shipments  (MYTD · {unit_short})"),
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:10px 0 16px;"></div>',
+        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
         unsafe_allow_html=True,
     )
 
@@ -1120,6 +1171,7 @@ def main():
     with col_btn:
         if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
+            st.toast("Data cache cleared — reloading…", icon="🔄")
             st.rerun()
     with col_toggle:
         use_bushels = st.toggle(

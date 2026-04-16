@@ -1,13 +1,16 @@
 """
-Corn Exporter Dashboard — John Stewart & Associates
-Monthly corn export shipments in thousands of metric tons (TMT).
+JSA Global Export Dashboard — John Stewart & Associates
+Monthly export shipments in thousands of metric tons (TMT).
+
+Commodities:
+  🌽 Corn     — US, Brazil, Argentina, Ukraine, Total Non-US, Major Exporters
+  🫘 Soybeans — US, Brazil, Argentina, Total Non-US, Major Exporters, China Imports
 
 Marketing Year conventions:
-  Oct–Sep : United States, Ukraine, Total Non-US, Major Exporters
-  Mar–Feb : Argentina, Brazil  (data re-sliced from raw dates automatically)
+  Oct–Sep : US, Ukraine, Total Non-US, Major Exporters, China Imports
+  Mar–Feb : Argentina, Brazil
 
 Data source: Corn Exporter Dashboard Data.xlsx
-New rows appended to the Excel file are automatically picked up on refresh.
 """
 
 import streamlit as st
@@ -18,13 +21,9 @@ import base64
 import os
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIG
+# PATHS
 # ─────────────────────────────────────────────────────────────────────────────
-# ── Path resolution: works locally AND on Streamlit Community Cloud ──────────
-# On Cloud, all files are relative to the repo root (same folder as this script).
-# Locally, files live in the same folder as this script too — so _HERE always works.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-
 DASHBOARD_DIR = (
     r"C:\Users\KoltenPostin\John Stewart and Associates"
     r"\JSA - Documents\Research Analyst\Dashboards"
@@ -32,7 +31,6 @@ DASHBOARD_DIR = (
 )
 
 def _find(filename: str) -> str:
-    """Return path to filename — checks script dir first, then DASHBOARD_DIR."""
     local = os.path.join(_HERE, filename)
     if os.path.exists(local):
         return local
@@ -42,60 +40,136 @@ EXCEL_PATH      = _find("Corn Exporter Dashboard Data.xlsx")
 LOGO_FULL_PATH  = _find("jsa_logo_full.png")
 LOGO_WHITE_PATH = _find("jsa_logo_white.png")
 
-# JSA brand colors
-JSA_GREEN  = "#4a6741"   # sage green — monogram box
-JSA_CYAN   = "#0693e3"   # JPSI accent blue
-JSA_DARK   = "#1e2124"   # header / deepest bg
-JSA_CHAR   = "#32373c"   # charcoal body bg
-JSA_MID    = "#2a2f35"   # mid-tone panel bg
+# ─────────────────────────────────────────────────────────────────────────────
+# BRAND COLORS
+# ─────────────────────────────────────────────────────────────────────────────
+JSA_GREEN = "#4a6741"
+JSA_CYAN  = "#0693e3"
+JSA_DARK  = "#1e2124"
+JSA_CHAR  = "#32373c"
+JSA_MID   = "#2a2f35"
 
-# Unit conversion: Thousand Metric Tons → Million Bushels
-# 1 MT = 2,204.62 lbs;  1 bu corn = 56 lbs  →  1 MT = 39.3682 bu
-# 1 TMT (1,000 MT) = 39,368.2 bu = 0.039368 Million Bushels
-BU_CONV_FACTOR = 1_000 * (2_204.62 / 56) / 1_000_000   # ≈ 0.039368
+# ─────────────────────────────────────────────────────────────────────────────
+# MONTH LISTS
+# ─────────────────────────────────────────────────────────────────────────────
+OCT_SEP_MONTHS = ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
+MAR_FEB_MONTHS = ["Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb"]
+ALL_MONTHS     = set(OCT_SEP_MONTHS)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMMODITY CONFIGURATION
+# ─────────────────────────────────────────────────────────────────────────────
+COMMODITY_CONFIG = {
+    "corn": {
+        "sheet":          "Corn",
+        "emoji":          "🌽",
+        "label":          "Corn",
+        "col_names":      ["MarketYear","Date","Month","US","Brazil","Argentina",
+                           "Ukraine","TotalNonUS","MajorExporter"],
+        "numeric_cols":   ["US","Brazil","Argentina","Ukraine","TotalNonUS","MajorExporter"],
+        "fields": {
+            "US":            "United States",
+            "Brazil":        "Brazil",
+            "Argentina":     "Argentina",
+            "Ukraine":       "Ukraine",
+            "TotalNonUS":    "Total Non-US",
+            "MajorExporter": "Major Exporters",
+        },
+        "mar_feb_fields": {"Brazil","Argentina"},
+        "import_fields":  set(),
+        "non_us_comps":   ["Brazil","Argentina","Ukraine"],
+        "major_comps":    ["US","Brazil","Argentina","Ukraine"],
+        "tile_order":     ["US","Brazil","Argentina","Ukraine","TotalNonUS","MajorExporter"],
+        "tile_accents": {
+            "US":            "#f9a825",
+            "Brazil":        "#2e7d32",
+            "Argentina":     "#29b6f6",
+            "Ukraine":       "#fdd835",
+            "TotalNonUS":    "#7e57c2",
+            "MajorExporter": "#ef5350",
+        },
+        "country_colors": {
+            "US":            "#f9a825",
+            "Brazil":        "#1b7e35",
+            "Argentina":     "#4fc3f7",
+            "Ukraine":       "#fdd835",
+            "TotalNonUS":    "#7e57c2",
+            "MajorExporter": "#ef5350",
+        },
+        "bu_lbs": 56.0,   # lbs per bushel of corn
+    },
+    "soybeans": {
+        "sheet":          "Soybeans",
+        "emoji":          "🫘",
+        "label":          "Soybeans",
+        "col_names":      ["MarketYear","Date","Month","US","Brazil","Argentina",
+                           "TotalNonUS","MajorExporter","ChinaImports"],
+        "numeric_cols":   ["US","Brazil","Argentina","TotalNonUS","MajorExporter","ChinaImports"],
+        "fields": {
+            "US":            "United States",
+            "Brazil":        "Brazil",
+            "Argentina":     "Argentina",
+            "TotalNonUS":    "Total Non-US",
+            "MajorExporter": "Major Exporters",
+            "ChinaImports":  "China Imports",
+        },
+        "mar_feb_fields": {"Brazil","Argentina"},
+        "import_fields":  {"ChinaImports"},
+        "non_us_comps":   ["Brazil","Argentina"],
+        "major_comps":    ["US","Brazil","Argentina"],
+        "tile_order":     ["US","Brazil","Argentina","TotalNonUS","MajorExporter","ChinaImports"],
+        "tile_accents": {
+            "US":            "#f9a825",
+            "Brazil":        "#2e7d32",
+            "Argentina":     "#29b6f6",
+            "TotalNonUS":    "#7e57c2",
+            "MajorExporter": "#ef5350",
+            "ChinaImports":  "#e53935",
+        },
+        "country_colors": {
+            "US":            "#f9a825",
+            "Brazil":        "#1b7e35",
+            "Argentina":     "#4fc3f7",
+            "TotalNonUS":    "#7e57c2",
+            "MajorExporter": "#ef5350",
+            "ChinaImports":  "#e53935",
+        },
+        "bu_lbs": 60.0,   # lbs per bushel of soybeans
+    },
+}
+
+
+def _bu_conv_factor(cfg: dict) -> float:
+    """TMT → Million Bushels conversion factor for this commodity."""
+    return 1_000 * (2_204.62 / cfg["bu_lbs"]) / 1_000_000
 
 
 def _apply_unit(pivot: dict, factor: float) -> dict:
-    """Return a new pivot with every non-None value multiplied by factor."""
     return {
         m: {y: (v * factor if v is not None else None) for y, v in yr.items()}
         for m, yr in pivot.items()
     }
 
-OCT_SEP_MONTHS = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar",
-                   "Apr", "May", "Jun", "Jul", "Aug", "Sep"]
-MAR_FEB_MONTHS = ["Mar", "Apr", "May", "Jun", "Jul", "Aug",
-                   "Sep", "Oct", "Nov", "Dec", "Jan", "Feb"]
-ALL_MONTHS     = set(OCT_SEP_MONTHS)          # same set, different order
 
-# Fields that use the Mar-Feb marketing year
-MAR_FEB_FIELDS = {"Brazil", "Argentina"}
-
-FIELDS = {
-    "US":            "United States",
-    "Brazil":        "Brazil",
-    "Argentina":     "Argentina",
-    "Ukraine":       "Ukraine",
-    "TotalNonUS":    "Total Non-US",
-    "MajorExporter": "Major Exporters",
-}
-
+# ─────────────────────────────────────────────────────────────────────────────
+# FAVICON
+# ─────────────────────────────────────────────────────────────────────────────
 def _make_favicon():
-    """Crop the JSA monogram from the full logo and tint it JSA green for the browser tab."""
     try:
         from PIL import Image
         img  = Image.open(LOGO_FULL_PATH).convert("RGBA")
         _, h = img.size
-        icon = img.crop((0, 0, h, h))          # left square = monogram only
+        icon = img.crop((0, 0, h, h))
         data = np.array(icon, dtype=np.uint8)
-        mask = data[:, :, 3] > 10              # logo pixels (non-transparent)
-        data[mask, 0], data[mask, 1], data[mask, 2] = 74, 103, 65  # #4a6741
+        mask = data[:, :, 3] > 10
+        data[mask, 0], data[mask, 1], data[mask, 2] = 74, 103, 65
         return Image.fromarray(data, "RGBA")
     except Exception:
-        return "🌽"
+        return "📊"
+
 
 st.set_page_config(
-    page_title="JSA Corn Exporter Dashboard",
+    page_title="JSA Export Dashboard",
     page_icon=_make_favicon(),
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -106,7 +180,6 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def _load_logo_b64(path: str) -> str | None:
-    """Return a base64-encoded data URI for a PNG logo, or None if not found."""
     try:
         with open(path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode()
@@ -116,68 +189,49 @@ def _load_logo_b64(path: str) -> str | None:
 
 
 def _add_chart_watermark(fig: go.Figure, logo_b64: str | None) -> go.Figure:
-    """Overlay the white JSA logo as a subtle watermark in the center of the chart."""
     if logo_b64 is None:
         return fig
-    fig.add_layout_image(
-        dict(
-            source=logo_b64,
-            xref="paper", yref="paper",
-            x=0.5, y=0.5,
-            sizex=0.30, sizey=0.30,
-            xanchor="center", yanchor="middle",
-            opacity=0.10,
-            layer="above",
-        )
-    )
+    fig.add_layout_image(dict(
+        source=logo_b64, xref="paper", yref="paper",
+        x=0.5, y=0.5, sizex=0.30, sizey=0.30,
+        xanchor="center", yanchor="middle",
+        opacity=0.10, layer="above",
+    ))
     return fig
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADING
 # ─────────────────────────────────────────────────────────────────────────────
-def load_data() -> pd.DataFrame:
-    df = pd.read_excel(EXCEL_PATH, header=0)
-    df.columns = [
-        "MarketYear", "Date", "Month",
-        "US", "Brazil", "Argentina", "Ukraine",
-        "TotalNonUS", "MajorExporter",
-    ]
+@st.cache_data(show_spinner=False)
+def load_data(commodity: str) -> pd.DataFrame:
+    cfg = COMMODITY_CONFIG[commodity]
+    df  = pd.read_excel(EXCEL_PATH, sheet_name=cfg["sheet"], header=0)
+    n   = len(cfg["col_names"])
+    df  = df.iloc[:, :n].copy()
+    df.columns = cfg["col_names"]
     df["MarketYear"] = df["MarketYear"].astype(str).str.strip()
     df["Month"]      = df["Month"].astype(str).str.strip()
     df["Date"]       = pd.to_datetime(df["Date"], errors="coerce")
     df = df[df["Month"].isin(ALL_MONTHS)].copy()
-    for col in ["US", "Brazil", "Argentina", "Ukraine", "TotalNonUS", "MajorExporter"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    return _enforce_aggregate_completeness(df)
+    for col in cfg["numeric_cols"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return _enforce_aggregate_completeness(df, cfg)
 
 
-def _enforce_aggregate_completeness(df: pd.DataFrame) -> pd.DataFrame:
+def _enforce_aggregate_completeness(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """
-    Recompute TotalNonUS and MajorExporter from their component countries,
-    and null out any row where a required component is missing.
-
-    Definitions (row-level — marketing-year convention doesn't matter here):
-      TotalNonUS    = Brazil + Argentina + Ukraine   (all 3 must be present)
-      MajorExporter = US + Brazil + Argentina + Ukraine (all 4 must be present)
-
-    This ensures that the aggregates are only shown for months where every
-    component country has reported, regardless of reporting-lag differences.
+    Recompute TotalNonUS and MajorExporter from components.
+    Null out any row where a required component is missing.
     """
     df = df.copy()
-
-    non_us_cols  = ["Brazil", "Argentina", "Ukraine"]
-    major_cols   = ["US", "Brazil", "Argentina", "Ukraine"]
-
+    non_us_cols = cfg["non_us_comps"]
+    major_cols  = cfg["major_comps"]
     all_non_us  = df[non_us_cols].notna().all(axis=1)
     all_major   = df[major_cols].notna().all(axis=1)
-
-    # Recompute sums from scratch (don't trust pre-calculated Excel values)
-    df["TotalNonUS"]    = np.where(all_non_us,
-                                   df[non_us_cols].sum(axis=1),
-                                   np.nan)
-    df["MajorExporter"] = np.where(all_major,
-                                   df[major_cols].sum(axis=1),
-                                   np.nan)
+    df["TotalNonUS"]    = np.where(all_non_us, df[non_us_cols].sum(axis=1), np.nan)
+    df["MajorExporter"] = np.where(all_major,  df[major_cols].sum(axis=1),  np.nan)
     return df
 
 
@@ -185,7 +239,6 @@ def _enforce_aggregate_completeness(df: pd.DataFrame) -> pd.DataFrame:
 # PIVOT BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 def build_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
-    """Oct–Sep pivot. Returns (pivot, sorted_years)."""
     months = OCT_SEP_MONTHS
     pivot  = {m: {} for m in months}
     for _, row in df.iterrows():
@@ -199,31 +252,19 @@ def build_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
 
 
 def build_arbr_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
-    """
-    Mar–Feb pivot for Argentina / Brazil.
-    Each row is assigned to a Mar-Feb marketing year based on its actual date:
-      Jan / Feb  → previous calendar year's March was the start
-      Mar – Dec  → this calendar year's March was the start
-    Label format: '2015/16' means March 2015 – February 2016.
-    """
     months = MAR_FEB_MONTHS
     pivot  = {m: {} for m in months}
     for _, row in df.iterrows():
         month = row["Month"]
         if month not in pivot:
             continue
-        date  = row["Date"]
+        date = row["Date"]
         if pd.isna(date):
             continue
-        val   = row[field]
-        year  = date.year
-        # Assign calendar start-year of the Mar-Feb marketing year
-        if month in ("Jan", "Feb"):
-            start = year - 1
-        else:
-            start = year
+        val  = row[field]
+        year = date.year
+        start = year - 1 if month in ("Jan","Feb") else year
         label = f"{start}/{str(start + 1)[-2:]}"
-        # Keep first occurrence only (guards against duplicates)
         if label not in pivot[month]:
             pivot[month][label] = None if pd.isna(val) else float(val)
     all_years = sorted({y for md in pivot.values() for y in md})
@@ -232,7 +273,6 @@ def build_arbr_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
 
 def build_cumulative_pivot(monthly_pivot: dict, years: list[str],
                             months: list[str]) -> dict:
-    """Running total within each marketing year."""
     cum = {m: {} for m in months}
     for year in years:
         running = 0.0
@@ -250,15 +290,10 @@ def build_cumulative_pivot(monthly_pivot: dict, years: list[str],
 # STATISTICS
 # ─────────────────────────────────────────────────────────────────────────────
 def get_complete_years(pivot: dict, last_month: str) -> list[str]:
-    """Years that have a non-null value for the final month of the marketing year."""
-    return sorted(
-        y for y, v in pivot.get(last_month, {}).items()
-        if v is not None
-    )
+    return sorted(y for y, v in pivot.get(last_month, {}).items() if v is not None)
 
 
 def olympic_avg(values: list) -> float | None:
-    """Drop highest and lowest, average the rest (needs ≥ 3 valid values)."""
     valid = [v for v in values if v is not None and not np.isnan(v)]
     if len(valid) < 3:
         return None
@@ -266,24 +301,10 @@ def olympic_avg(values: list) -> float | None:
     return sum(s[1:-1]) / len(s[1:-1])
 
 
-def compute_stats(
-    data_pivot: dict,
-    all_years: list[str],
-    complete_years: list[str],   # excludes current year
-    cy: str,
-    ly: str | None,
-    months: list[str],
-    is_cumulative: bool = False,
-) -> dict:
-    """
-    Stats are based ONLY on prior (complete) marketing years — CY is excluded
-    from Min, Max, and Olympic Average so the stats always reflect historical norms.
-    """
-    # Use the 6 most-recent complete (prior) years for Olympic avg
-    oly_years   = sorted(complete_years)[-6:]
-    # Historical years = complete years only (excludes CY)
-    hist_years  = sorted(complete_years)
-
+def compute_stats(data_pivot, all_years, complete_years, cy, ly,
+                  months, is_cumulative=False) -> dict:
+    oly_years  = sorted(complete_years)[-6:]
+    hist_years = sorted(complete_years)
     stats: dict = {}
 
     for month in months:
@@ -292,42 +313,31 @@ def compute_stats(
         oly_vals   = [data_pivot[month].get(y) for y in oly_years]
         cy_val     = data_pivot[month].get(cy)
         ly_val     = data_pivot[month].get(ly) if ly else None
-
         oly = olympic_avg(oly_vals)
-        mn  = min(clean_hist) if clean_hist else None
-        mx  = max(clean_hist) if clean_hist else None
-
         stats[month] = dict(
-            oly_avg   = oly,
-            min       = mn,
-            max       = mx,
-            pct_vs_ly = _pct(cy_val, ly_val),
-            pct_vs_oly= _pct(cy_val, oly),
+            oly_avg    = oly,
+            min        = min(clean_hist) if clean_hist else None,
+            max        = max(clean_hist) if clean_hist else None,
+            pct_vs_ly  = _pct(cy_val, ly_val),
+            pct_vs_oly = _pct(cy_val, oly),
         )
 
-    # ── Annual totals (historical only for stats) ──────────────────────────
     totals: dict[str, float | None] = {}
     for year in all_years:
         yr_vals  = [data_pivot[m].get(year) for m in months]
         non_none = [v for v in yr_vals if v is not None]
-        if is_cumulative:
-            totals[year] = non_none[-1] if non_none else None
-        else:
-            totals[year] = sum(non_none) if non_none else None
+        totals[year] = (non_none[-1] if non_none else None) if is_cumulative \
+                       else (sum(non_none) if non_none else None)
 
     hist_totals = [totals.get(y) for y in hist_years]
     clean_ht    = [v for v in hist_totals if v is not None]
-    oly_totals  = [totals.get(y) for y in oly_years]
-    cy_total    = totals.get(cy)
-    ly_total    = totals.get(ly) if ly else None
-    oly_t       = olympic_avg(oly_totals)
-
+    oly_t       = olympic_avg([totals.get(y) for y in oly_years])
     stats["TOTAL"] = dict(
-        oly_avg   = oly_t,
-        min       = min(clean_ht) if clean_ht else None,
-        max       = max(clean_ht) if clean_ht else None,
-        pct_vs_ly = _pct(cy_total, ly_total),
-        pct_vs_oly= _pct(cy_total, oly_t),
+        oly_avg    = oly_t,
+        min        = min(clean_ht) if clean_ht else None,
+        max        = max(clean_ht) if clean_ht else None,
+        pct_vs_ly  = _pct(totals.get(cy), totals.get(ly) if ly else None),
+        pct_vs_oly = _pct(totals.get(cy), oly_t),
     )
     stats["_totals"] = totals
     return stats
@@ -367,125 +377,88 @@ def pct_color(val) -> str:
 _TABLE_CSS = """
 <style>
 .corn-wrap {
-    overflow-x: auto;
-    max-height: 580px;
-    overflow-y: auto;
-    border-radius: 6px;
-    border: 1px solid #484f56;
-    font-family: Arial, sans-serif;
-    font-size: 12.5px;
-    line-height: 1.35;
-    margin-bottom: 8px;
+    overflow-x: auto; max-height: 580px; overflow-y: auto;
+    border-radius: 6px; border: 1px solid #484f56;
+    font-family: Arial, sans-serif; font-size: 12.5px;
+    line-height: 1.35; margin-bottom: 8px;
 }
-.corn-tbl {
-    border-collapse: collapse;
-    width: max-content;
-    min-width: 100%;
-}
+.corn-tbl { border-collapse: collapse; width: max-content; min-width: 100%; }
 .corn-tbl th {
-    background: #1e2124;
-    color: #ffffff;
-    font-weight: 600;
-    text-align: center;
-    padding: 7px 10px;
-    white-space: nowrap;
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    border-right: 1px solid #484f56;
-    border-bottom: 2px solid #0d0f11;
+    background: #1e2124; color: #ffffff; font-weight: 600;
+    text-align: center; padding: 7px 10px; white-space: nowrap;
+    position: sticky; top: 0; z-index: 3;
+    border-right: 1px solid #484f56; border-bottom: 2px solid #0d0f11;
 }
 .corn-tbl th.stat-hdr  { background: #2a2f35; color: #ffffff; z-index: 5; }
 .corn-tbl th.cy-hdr    { background: #0555a0; color: #ffffff; }
 .corn-tbl td {
-    padding: 5px 10px;
-    text-align: right;
-    white-space: nowrap;
-    border-bottom: 1px solid #484f56;
-    border-right: 1px solid #484f56;
-    background: #32373c;
-    color: #ffffff;
+    padding: 5px 10px; text-align: right; white-space: nowrap;
+    border-bottom: 1px solid #484f56; border-right: 1px solid #484f56;
+    background: #32373c; color: #ffffff;
 }
 .corn-tbl tr:hover td  { filter: brightness(1.2); }
 .corn-tbl td.m-cell    { text-align: left; font-weight: 700;
                           background: #1e2124 !important; color: #ffffff !important; }
 .corn-tbl td.s-cell    { background: #f4f6f8 !important; color: #000000 !important; }
 .corn-tbl td.p-cell    { background: #f4f6f8 !important; font-weight: 700; }
-.corn-tbl td.left-divider  { border-left: 2px solid #0693e3 !important; }
-.corn-tbl th.left-divider  { border-left: 2px solid #0693e3 !important; }
+.corn-tbl td.left-divider { border-left: 2px solid #0693e3 !important; }
+.corn-tbl th.left-divider { border-left: 2px solid #0693e3 !important; }
 .corn-tbl td.cy-cell   { background: #0693e3 !important; font-weight: 600; color: #ffffff !important; }
 .corn-tbl tr.total-row td {
-    background: #232729 !important;
-    font-weight: 700;
-    border-top: 2px solid #0693e3;
-    color: #ffffff;
+    background: #232729 !important; font-weight: 700;
+    border-top: 2px solid #0693e3; color: #ffffff;
 }
-.corn-tbl tr.total-row td.cy-cell  { background: #0555a0 !important; color: #ffffff !important; }
-.corn-tbl tr.total-row td.s-cell   { background: #2a2f35 !important; color: #ffffff !important; }
-.corn-tbl tr.total-row td.p-cell   { background: #2a2f35 !important; }
+.corn-tbl tr.total-row td.cy-cell { background: #0555a0 !important; color: #ffffff !important; }
+.corn-tbl tr.total-row td.s-cell  { background: #2a2f35 !important; color: #ffffff !important; }
+.corn-tbl tr.total-row td.p-cell  { background: #2a2f35 !important; }
 </style>
 """
 
-def render_table_html(
-    data_pivot: dict,
-    stats: dict,
-    all_years: list[str],
-    cy: str,
-    ly: str | None,
-    months: list[str],
-    decimals: int = 0,
-) -> str:
-    fn = lambda v: fmt_num(v, decimals)   # shorthand with correct precision
-
-    W = dict(month=65, stat=94, pct=112, year=90)
+def render_table_html(data_pivot, stats, all_years, cy, ly, months,
+                      decimals: int = 0) -> str:
+    fn = lambda v: fmt_num(v, decimals)
+    W  = dict(month=65, stat=94, pct=112, year=90)
 
     def sticky_left(w):
         return f"position:sticky;left:0;min-width:{w}px;z-index:2;"
 
-    # Sticky-right offsets (right → left):
-    # %CY/Oly | %CY/LY | Max | Min | OlyAvg | CY
     R = [0]
-    R.append(R[-1] + W["pct"])   # %CY/LY
-    R.append(R[-1] + W["pct"])   # Max
-    R.append(R[-1] + W["stat"])  # Min
-    R.append(R[-1] + W["stat"])  # OlyAvg
-    R.append(R[-1] + W["stat"])  # CY col  ← leftmost sticky-right
+    R.append(R[-1] + W["pct"])
+    R.append(R[-1] + W["pct"])
+    R.append(R[-1] + W["stat"])
+    R.append(R[-1] + W["stat"])
+    R.append(R[-1] + W["stat"])
 
     def sticky_right(r_idx, w):
         return f"position:sticky;right:{R[r_idx]}px;min-width:{w}px;z-index:5;"
 
-    # ── Header ────────────────────────────────────────────────────────────
-    hdr  = (f'<th class="stat-hdr" '
-            f'style="{sticky_left(W["month"])};text-align:left;z-index:10;">Month</th>')
+    hdr = (f'<th class="stat-hdr" '
+           f'style="{sticky_left(W["month"])};text-align:left;z-index:10;">Month</th>')
     for year in all_years:
         if year == cy:
             continue
         hdr += f'<th style="min-width:{W["year"]}px;">{year}</th>'
 
-    stat_hdr_defs = [
+    for r_idx, w, cls, lbl in [
         (5, W["year"], "cy-hdr left-divider", cy),
-        (4, W["stat"], "stat-hdr",             "6-Yr<br>Oly Avg"),
-        (3, W["stat"], "stat-hdr",             "Min"),
-        (2, W["stat"], "stat-hdr",             "Max"),
-        (1, W["pct"],  "stat-hdr",             "% Chg<br>CY vs LY"),
-        (0, W["pct"],  "stat-hdr",             "% Chg CY<br>vs Oly Avg"),
-    ]
-    for r_idx, w, cls, lbl in stat_hdr_defs:
+        (4, W["stat"], "stat-hdr",            "6-Yr<br>Oly Avg"),
+        (3, W["stat"], "stat-hdr",            "Min"),
+        (2, W["stat"], "stat-hdr",            "Max"),
+        (1, W["pct"],  "stat-hdr",            "% Chg<br>CY vs LY"),
+        (0, W["pct"],  "stat-hdr",            "% Chg CY<br>vs Oly Avg"),
+    ]:
         hdr += f'<th class="{cls}" style="{sticky_right(r_idx, w)}">{lbl}</th>'
 
-    # ── Row builder ───────────────────────────────────────────────────────
     def build_row(label, s, year_data, is_total=False):
-        # Top-2 / bottom-2 among historical years (excludes CY)
         valid = [(y, year_data[y]) for y in all_years
                  if y != cy and year_data.get(y) is not None]
-        srt   = sorted(valid, key=lambda x: x[1])
-        n     = len(srt)
-        bot2  = {y for y, _ in srt[:2]}  if n >= 2 else set()
-        top2  = {y for y, _ in srt[-2:]} if n >= 2 else set()
+        srt  = sorted(valid, key=lambda x: x[1])
+        n    = len(srt)
+        bot2 = {y for y, _ in srt[:2]}  if n >= 2 else set()
+        top2 = {y for y, _ in srt[-2:]} if n >= 2 else set()
         bot2 -= top2
 
-        row  = f'<td class="m-cell" style="{sticky_left(W["month"])}">{label}</td>'
-
+        row = f'<td class="m-cell" style="{sticky_left(W["month"])}">{label}</td>'
         for year in all_years:
             if year == cy:
                 continue
@@ -500,15 +473,14 @@ def render_table_html(
         pc_ly  = s["pct_vs_ly"]
         pc_oly = s["pct_vs_oly"]
         cy_val = year_data.get(cy)
-        stat_defs = [
+        for r_idx, w, cls, val_str, xtra in [
             (5, W["year"], "cy-cell left-divider", fn(cy_val),       ""),
             (4, W["stat"], "s-cell",               fn(s["oly_avg"]), ""),
             (3, W["stat"], "s-cell",               fn(s["min"]),     ""),
             (2, W["stat"], "s-cell",               fn(s["max"]),     ""),
-            (1, W["pct"],  "p-cell",               fmt_pct(pc_ly),        f"color:{pct_color(pc_ly)};"),
-            (0, W["pct"],  "p-cell",               fmt_pct(pc_oly),       f"color:{pct_color(pc_oly)};"),
-        ]
-        for r_idx, w, cls, val_str, xtra in stat_defs:
+            (1, W["pct"],  "p-cell", fmt_pct(pc_ly),  f"color:{pct_color(pc_ly)};"),
+            (0, W["pct"],  "p-cell", fmt_pct(pc_oly), f"color:{pct_color(pc_oly)};"),
+        ]:
             row += (f'<td class="{cls}" style="{sticky_right(r_idx, w)}{xtra}">'
                     f'{val_str}</td>')
 
@@ -521,21 +493,17 @@ def render_table_html(
                                {y: data_pivot[month].get(y) for y in all_years})
     rows_html += build_row("TOTAL", stats["TOTAL"], stats["_totals"], is_total=True)
 
-    return (
-        _TABLE_CSS
-        + '<div class="corn-wrap">'
-        + '<table class="corn-tbl">'
-        + f'<thead><tr>{hdr}</tr></thead>'
-        + f'<tbody>{rows_html}</tbody>'
-        + '</table></div>'
-    )
+    return (_TABLE_CSS
+            + '<div class="corn-wrap"><table class="corn-tbl">'
+            + f'<thead><tr>{hdr}</tr></thead>'
+            + f'<tbody>{rows_html}</tbody>'
+            + '</table></div>')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CHARTS
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _base_layout(title_text: str, x_title: str, y_title: str) -> dict:
+def _base_layout(title_text, x_title, y_title) -> dict:
     axis = dict(
         gridcolor="#484f56", linecolor="#484f56",
         tickcolor="#aaaaaa", tickfont=dict(color="#cccccc"),
@@ -543,8 +511,7 @@ def _base_layout(title_text: str, x_title: str, y_title: str) -> dict:
     )
     return dict(
         title=dict(text=title_text, font=dict(color="#ffffff", size=15, family="Arial")),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#32373c",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#32373c",
         font=dict(family="Arial", color="#ffffff", size=12),
         legend=dict(bgcolor="rgba(30,33,36,0.92)", bordercolor="#484f56",
                     borderwidth=1, font=dict(size=11)),
@@ -555,39 +522,26 @@ def _base_layout(title_text: str, x_title: str, y_title: str) -> dict:
     )
 
 
-def _year_style(year: str, cy: str, ly: str | None, all_years: list[str]) -> tuple:
-    """Returns (color, line_width, opacity) for a given marketing year."""
+def _year_style(year, cy, ly, all_years) -> tuple:
     if year == cy:
-        return "#0693e3", 4.5, 1.0   # CY: JPSI cyan, thickest
+        return "#0693e3", 4.5, 1.0
     if year == ly:
-        return "#ffffff", 3.0, 0.92  # LY: white, thick
-    # Older years: faded blue-grays, progressively lighter toward most-recent
+        return "#ffffff", 3.0, 0.92
     other = [y for y in all_years if y != cy and y != ly]
     idx   = other.index(year) if year in other else 0
     n     = max(len(other) - 1, 1)
     t     = idx / n
-    r     = int(100 + 80 * t)
-    g     = int(120 + 80 * t)
-    b     = int(155 + 65 * t)
-    return f"rgb({r},{g},{b})", round(1.0 + 0.4 * t, 1), round(0.18 + 0.45 * t, 2)
+    return (f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})",
+            round(1.0 + 0.4 * t, 1), round(0.18 + 0.45 * t, 2))
 
 
-def make_seasonal_chart(
-    data_pivot: dict,
-    all_years: list[str],
-    cy: str,
-    complete_years: list[str],   # excludes CY — used for overlays
-    field_label: str,
-    is_cumulative: bool,
-    months: list[str],
-    logo_b64: str | None = None,
-    unit_short: str = "TMT",
-) -> go.Figure:
+def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
+                        field_label, is_cumulative, months,
+                        logo_b64=None, unit_short="TMT") -> go.Figure:
     lbl = "Cumulative " if is_cumulative else ""
     fig = go.Figure()
     ly  = complete_years[-1] if complete_years else None
 
-    # ── ① ±1 Std Dev shaded band (past 8 complete years) ─────────────────
     hist_8 = sorted(complete_years)[-8:]
     if len(hist_8) >= 2:
         band_upper, band_lower = [], []
@@ -595,38 +549,30 @@ def make_seasonal_chart(
             vals  = [data_pivot[m].get(y) for y in hist_8]
             clean = [v for v in vals if v is not None]
             if len(clean) >= 2:
-                mu  = float(np.mean(clean))
-                sig = float(np.std(clean, ddof=1))
+                mu, sig = float(np.mean(clean)), float(np.std(clean, ddof=1))
                 band_upper.append(mu + sig)
                 band_lower.append(max(0.0, mu - sig))
             else:
                 band_upper.append(None)
                 band_lower.append(None)
         fig.add_trace(go.Scatter(
-            x=months + months[::-1],
-            y=band_upper + band_lower[::-1],
-            fill="toself",
-            fillcolor="rgba(6,147,227,0.10)",
+            x=months + months[::-1], y=band_upper + band_lower[::-1],
+            fill="toself", fillcolor="rgba(6,147,227,0.10)",
             line=dict(color="rgba(0,0,0,0)"),
             name=f"±1 Std Dev ({len(hist_8)} yr)",
-            hoverinfo="skip",
-            showlegend=True,
+            hoverinfo="skip", showlegend=True,
         ))
 
-    # ── ② 6-yr Olympic Avg line ───────────────────────────────────────────
     oly_6 = sorted(complete_years)[-6:]
     if len(oly_6) >= 3:
-        oly_vals = [olympic_avg([data_pivot[m].get(y) for y in oly_6])
-                    for m in months]
+        oly_vals = [olympic_avg([data_pivot[m].get(y) for y in oly_6]) for m in months]
         fig.add_trace(go.Scatter(
-            x=months, y=oly_vals,
-            mode="lines+markers",
+            x=months, y=oly_vals, mode="lines+markers",
             name="6-Yr Olympic Avg",
             line=dict(color="#0693e3", width=2.5, dash="dash"),
             marker=dict(symbol="diamond", size=6, color="#0693e3"),
         ))
 
-    # ── ③ Year lines — oldest first, CY & LY rendered last (on top) ──────
     draw_order = [y for y in all_years if y != cy and y != ly]
     if ly:
         draw_order.append(ly)
@@ -637,13 +583,10 @@ def make_seasonal_chart(
         color, width, opacity = _year_style(year, cy, ly, all_years)
         is_key = year in (cy, ly)
         fig.add_trace(go.Scatter(
-            x=months, y=vals,
-            mode="lines+markers",
-            name=year,
+            x=months, y=vals, mode="lines+markers", name=year,
             line=dict(color=color, width=width),
             marker=dict(size=5 if is_key else 3, color=color),
-            opacity=opacity,
-            connectgaps=False,
+            opacity=opacity, connectgaps=False,
         ))
 
     fig.update_layout(**_base_layout(
@@ -655,62 +598,41 @@ def make_seasonal_chart(
 
 
 _BAR_COLORS = [
-    "#1565c0", "#2e7d32", "#6a1b9a", "#ad1457",
-    "#00695c", "#e65100", "#37474f", "#4527a0",
-    "#558b2f", "#00838f", "#4e342e", "#283593",
+    "#1565c0","#2e7d32","#6a1b9a","#ad1457",
+    "#00695c","#e65100","#37474f","#4527a0",
+    "#558b2f","#00838f","#4e342e","#283593",
 ]
 
 
-def make_column_chart(
-    data_pivot: dict,
-    stats: dict,
-    selected_years: list[str],
-    cy: str,
-    field_label: str,
-    is_cumulative: bool,
-    months: list[str],
-    logo_b64: str | None = None,
-    unit_short: str = "TMT",
-) -> go.Figure:
+def make_column_chart(data_pivot, stats, selected_years, cy,
+                      field_label, is_cumulative, months,
+                      logo_b64=None, unit_short="TMT") -> go.Figure:
     lbl = "Cumulative " if is_cumulative else ""
     fig = go.Figure()
 
-    # Min/Max shaded band (historical only — CY excluded from stats)
     mins = [stats[m]["min"] for m in months]
     maxs = [stats[m]["max"] for m in months]
     fig.add_trace(go.Scatter(
-        x=months + months[::-1],
-        y=maxs + mins[::-1],
-        fill="toself",
-        fillcolor="rgba(6,147,227,0.08)",
+        x=months + months[::-1], y=maxs + mins[::-1],
+        fill="toself", fillcolor="rgba(6,147,227,0.08)",
         line=dict(color="rgba(0,0,0,0)"),
-        name="Hist. Min–Max Range",
-        hoverinfo="skip",
+        name="Hist. Min–Max Range", hoverinfo="skip",
     ))
-
-    # Olympic-average line (historical only) — JPSI cyan
     olys = [stats[m]["oly_avg"] for m in months]
     fig.add_trace(go.Scatter(
-        x=months, y=olys,
-        mode="lines+markers",
-        name="6-Yr Olympic Avg",
+        x=months, y=olys, mode="lines+markers", name="6-Yr Olympic Avg",
         line=dict(color="#0693e3", width=2.5, dash="dot"),
         marker=dict(symbol="diamond", size=7, color="#0693e3"),
     ))
 
-    # Bars for selected years
     color_idx = 0
     for year in selected_years:
         vals  = [data_pivot[m].get(year) for m in months]
         color = "#f9a825" if year == cy else _BAR_COLORS[color_idx % len(_BAR_COLORS)]
         if year != cy:
             color_idx += 1
-        fig.add_trace(go.Bar(
-            x=months, y=vals,
-            name=year,
-            marker_color=color,
-            opacity=0.85,
-        ))
+        fig.add_trace(go.Bar(x=months, y=vals, name=year,
+                             marker_color=color, opacity=0.85))
 
     fig.update_layout(
         barmode="group",
@@ -726,30 +648,12 @@ def make_column_chart(
 # ─────────────────────────────────────────────────────────────────────────────
 # STAT TILES
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Display order and per-country accent colors for tiles
-_TILE_ORDER = ["US", "Brazil", "Argentina", "Ukraine", "TotalNonUS", "MajorExporter"]
-_TILE_ACCENT = {
-    "US":            "#f9a825",  # gold
-    "Brazil":        "#2e7d32",  # green
-    "Argentina":     "#29b6f6",  # sky blue
-    "Ukraine":       "#fdd835",  # yellow
-    "TotalNonUS":    "#7e57c2",  # purple
-    "MajorExporter": "#ef5350",  # red
-}
-
-
-def _compute_tile_stats(df: pd.DataFrame,
-                        use_bushels: bool,
-                        unit_factor: float) -> list[dict | None]:
-    """
-    For every country in _TILE_ORDER compute the most-recent monthly value
-    and the cumulative YTD value, each with % vs LY and % vs 6-yr Olympic Avg.
-    Returns a list parallel to _TILE_ORDER (None entry = no data).
-    """
-    tiles: list[dict | None] = []
-    for field in _TILE_ORDER:
-        mar_feb     = field in MAR_FEB_FIELDS
+def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
+                        arbr_oct_sep: bool = False) -> list:
+    tiles = []
+    for field in cfg["tile_order"]:
+        # If the user toggled Oct-Sep for AR/BR, treat those fields as Oct-Sep too
+        mar_feb     = field in cfg["mar_feb_fields"] and not arbr_oct_sep
         months_list = MAR_FEB_MONTHS if mar_feb else OCT_SEP_MONTHS
         last_month  = "Feb" if mar_feb else "Sep"
         my_label    = "Mar–Feb" if mar_feb else "Oct–Sep"
@@ -769,7 +673,6 @@ def _compute_tile_stats(df: pd.DataFrame,
         if use_bushels:
             pivot = _apply_unit(pivot, unit_factor)
 
-        # Most-recent month that has a CY value
         latest_month = latest_val = None
         for m in reversed(months_list):
             v = pivot[m].get(cy)
@@ -781,11 +684,8 @@ def _compute_tile_stats(df: pd.DataFrame,
             tiles.append(None)
             continue
 
-        # Monthly benchmarks
         ly_m    = pivot[latest_month].get(ly) if ly else None
         oly_m   = olympic_avg([pivot[latest_month].get(y) for y in oly_years])
-
-        # Cumulative through latest_month
         cum_piv = build_cumulative_pivot(pivot, all_years, months_list)
         cy_cum  = cum_piv[latest_month].get(cy)
         ly_cum  = cum_piv[latest_month].get(ly) if ly else None
@@ -793,15 +693,15 @@ def _compute_tile_stats(df: pd.DataFrame,
 
         tiles.append(dict(
             field        = field,
-            label        = FIELDS[field],
+            label        = cfg["fields"][field],
             my_label     = my_label,
             cy           = cy,
             latest_month = latest_month,
-            # Monthly
+            accent       = cfg["tile_accents"].get(field, JSA_CYAN),
+            is_import    = field in cfg["import_fields"],
             monthly_val  = latest_val,
             pct_ly_m     = _pct(latest_val, ly_m),
             pct_oly_m    = _pct(latest_val, oly_m),
-            # Cumulative
             cum_val      = cy_cum,
             pct_ly_c     = _pct(cy_cum, ly_cum),
             pct_oly_c    = _pct(cy_cum, oly_cum),
@@ -809,67 +709,51 @@ def _compute_tile_stats(df: pd.DataFrame,
     return tiles
 
 
-def _pct_chip(val: float | None, label: str) -> str:
-    """Small colored percentage span for tile footers."""
+def _pct_chip(val, label) -> str:
     if val is None:
         return f'<span style="color:#3d4a58;">{label}&thinsp;—</span>'
     color = "#4caf50" if val >= 0 else "#ef5350"
     sign  = "+" if val >= 0 else ""
-    return (f'<span style="color:{color};font-weight:700;">'
-            f'{label}&thinsp;{sign}{val:.1f}%</span>')
+    return f'<span style="color:{color};font-weight:700;">{label}&thinsp;{sign}{val:.1f}%</span>'
 
 
-def _single_tile(t: dict, row: str, unit_short: str, unit_decimals: int) -> str:
-    """Return the <div> HTML for one stat tile.  row = 'monthly' | 'cumulative'."""
-    accent = _TILE_ACCENT.get(t["field"], JSA_CYAN)
-
+def _single_tile(t, row, unit_short, unit_decimals) -> str:
+    accent = t.get("accent", JSA_CYAN)
     if row == "monthly":
-        val      = t["monthly_val"]
-        pct_ly   = t["pct_ly_m"]
-        pct_oly  = t["pct_oly_m"]
+        val, pct_ly, pct_oly = t["monthly_val"], t["pct_ly_m"], t["pct_oly_m"]
         sub_line = (f'<span style="color:#5a6878;">{t["latest_month"]}</span>'
-                    f'&nbsp;·&nbsp;'
-                    f'<span style="color:#445060;">{t["cy"]}</span>')
+                    f'&nbsp;·&nbsp;<span style="color:#445060;">{t["cy"]}</span>')
         type_tag = ""
     else:
-        val      = t["cum_val"]
-        pct_ly   = t["pct_ly_c"]
-        pct_oly  = t["pct_oly_c"]
+        val, pct_ly, pct_oly = t["cum_val"], t["pct_ly_c"], t["pct_oly_c"]
         sub_line = (f'<span style="color:#5a6878;">thru&nbsp;{t["latest_month"]}</span>'
-                    f'&nbsp;·&nbsp;'
-                    f'<span style="color:#445060;">{t["cy"]}&nbsp;({t["my_label"]})</span>')
+                    f'&nbsp;·&nbsp;<span style="color:#445060;">'
+                    f'{t["cy"]}&nbsp;({t["my_label"]})</span>')
         type_tag = (f'<span style="font-size:9px;font-weight:700;color:{accent};'
                     f'text-transform:uppercase;letter-spacing:0.5px;">MYTD</span>&nbsp;')
 
-    vol_str = fmt_num(val, unit_decimals) if val is not None else "—"
+    vol_str  = fmt_num(val, unit_decimals) if val is not None else "—"
+    imp_note = (' <span style="font-size:9px;color:#888;">(imports)</span>'
+                if t.get("is_import") else "")
 
     return (
-        f'<div style="flex:1;min-width:145px;max-width:220px;'
-        f'background:#21262c;border-radius:8px;padding:13px 14px 11px;'
-        f'border:1px solid #2e353d;border-top:3px solid {accent};'
-        f'text-align:center;">'
-        # Country name
+        f'<div style="flex:1;min-width:145px;max-width:220px;background:#21262c;'
+        f'border-radius:8px;padding:13px 14px 11px;border:1px solid #2e353d;'
+        f'border-top:3px solid {accent};text-align:center;">'
         f'<div style="color:#8a9aaa;font-size:10.5px;font-weight:700;'
         f'text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;">'
-        f'{type_tag}{t["label"]}</div>'
-        # Volume
+        f'{type_tag}{t["label"]}{imp_note}</div>'
         f'<div style="color:{JSA_CYAN};font-size:23px;font-weight:700;'
         f'line-height:1.1;font-family:Arial;">{vol_str}</div>'
-        # Unit + month (subtle)
         f'<div style="font-size:10px;margin:2px 0 7px;color:#3d4a58;">'
         f'{unit_short}&nbsp;·&nbsp;{sub_line}</div>'
-        # % chips
         f'<div style="font-size:10.5px;display:flex;gap:10px;justify-content:center;">'
-        f'{_pct_chip(pct_ly, "LY")}'
-        f'{_pct_chip(pct_oly, "Avg")}'
-        f'</div>'
+        f'{_pct_chip(pct_ly,"LY")}{_pct_chip(pct_oly,"Avg")}</div>'
         f'</div>'
     )
 
 
-def _tile_row(tiles: list, row: str, unit_short: str,
-              unit_decimals: int, heading: str) -> str:
-    """Render a labeled row of 6 stat tiles as an HTML block."""
+def _tile_row(tiles, row, unit_short, unit_decimals, heading) -> str:
     inner = "".join(
         _single_tile(t, row, unit_short, unit_decimals) if t else
         '<div style="flex:1;min-width:145px;"></div>'
@@ -880,96 +764,53 @@ def _tile_row(tiles: list, row: str, unit_short: str,
         f'<div style="font-size:10px;font-weight:700;color:#5a6878;'
         f'text-transform:uppercase;letter-spacing:0.8px;margin-bottom:7px;">'
         f'{heading}</div>'
-        f'<div style="display:flex;gap:8px;flex-wrap:nowrap;'
-        f'justify-content:center;">{inner}</div>'
-        f'</div>'
+        f'<div style="display:flex;gap:8px;flex-wrap:nowrap;justify-content:center;">'
+        f'{inner}</div></div>'
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN APP
+# COMMODITY TAB RENDERER
 # ─────────────────────────────────────────────────────────────────────────────
-def main():
+def _run_commodity_tab(commodity: str, use_bushels: bool,
+                       unit_short: str, unit_decimals: int, unit_long: str,
+                       logo_white_b64: str | None):
+    """Render the full dashboard for one commodity inside its top-level tab."""
+    cfg = COMMODITY_CONFIG[commodity]
+    pfx = commodity   # namespace all widget keys
 
-    # ── Load logos ────────────────────────────────────────────────────────
-    logo_white_b64 = _load_logo_b64(LOGO_WHITE_PATH)   # for charts (dark bg)
-    logo_full_b64  = _load_logo_b64(LOGO_FULL_PATH)    # for header (dark panel)
+    # Per-commodity unit factor (different bu_lbs for corn vs soybeans)
+    unit_factor = _bu_conv_factor(cfg) if use_bushels else 1.0
 
-    # ── Header ───────────────────────────────────────────────────────────
-    logo_img_tag = (
-        f'<img src="{logo_full_b64}" '
-        f'style="height:52px;width:auto;display:block;" alt="JSA Logo">'
-        if logo_full_b64 else
-        '<span style="font-size:22px;font-weight:700;color:#fff;font-family:Georgia,serif;">JSA</span>'
+    # ── AR/BR marketing-year convention toggle ────────────────────────────
+    arbr_oct_sep: bool = st.toggle(
+        "🗓️  Argentina & Brazil: use Oct–Sep MY",
+        value=False,
+        key=f"{pfx}_arbr_oct_sep",
+        help=(
+            "By default Argentina & Brazil use a **Mar–Feb** marketing year.\n\n"
+            "Enable this to align them with the **Oct–Sep** convention used by "
+            "the US, Ukraine, and aggregates — useful for apples-to-apples "
+            "cross-country comparisons."
+        ),
     )
-    st.markdown(f"""
-    <div style="background:#1e2124;padding:16px 28px;border-radius:10px;
-                margin-bottom:18px;border-bottom:3px solid {JSA_GREEN};
-                display:flex;align-items:center;gap:24px;">
-        <div style="flex-shrink:0;">{logo_img_tag}</div>
-        <div style="border-left:1px solid #484f56;padding-left:22px;flex:1;">
-            <h1 style="color:#fff;margin:0;font-size:24px;font-family:Arial;
-                       letter-spacing:0.3px;">
-                Global Corn Export Dashboard
-            </h1>
-            <p style="color:#aab4c0;margin:5px 0 0 0;font-size:12.5px;font-family:Arial;">
-                Monthly shipments in thousands of metric tons (TMT)
-                &nbsp;&nbsp;•&nbsp;&nbsp;
-                US / Ukraine / Aggregates: Oct–Sep MY
-                &nbsp;&nbsp;•&nbsp;&nbsp;
-                Argentina / Brazil: Mar–Feb MY
-            </p>
-        </div>
-        <div style="flex-shrink:0;text-align:right;">
-            <span style="display:inline-block;background:{JSA_GREEN};color:#fff;
-                         font-family:Arial;font-size:11px;font-weight:600;
-                         padding:4px 12px;border-radius:9999px;letter-spacing:0.5px;">
-                RESEARCH ANALYTICS
-            </span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Refresh + Unit toggle ─────────────────────────────────────────────
-    col_btn, col_toggle, col_note = st.columns([1, 1.6, 4.4])
-    with col_btn:
-        if st.button("🔄 Refresh Data", use_container_width=True):
-            st.rerun()
-    with col_toggle:
-        use_bushels = st.toggle(
-            "📐 Million Bushels (Mbu)",
-            value=False,
-            key="unit_toggle",
-            help=(
-                "Convert volumes from Thousand Metric Tons (TMT) to Million Bushels (Mbu).\n\n"
-                "Conversion: 1 MT = 2,204.62 lbs ÷ 56 lbs/bu = 39.37 bu\n"
-                "→ 1 TMT ≈ 0.03937 Mbu"
-            ),
-        )
-    with col_note:
-        st.caption(
-            "Reads live from the Excel file. After appending new rows, "
-            "click **Refresh Data** — tables, stats, and charts update automatically."
-        )
-
-    # Unit labels and conversion factor
-    unit_factor   = BU_CONV_FACTOR if use_bushels else 1.0
-    unit_short    = "Mbu"  if use_bushels else "TMT"
-    unit_long     = "Million Bushels (Mbu)" if use_bushels else "Thousand Metric Tons (TMT)"
-    unit_decimals = 1      if use_bushels else 0
 
     # ── Load data ─────────────────────────────────────────────────────────
     try:
-        df = load_data()
+        df = load_data(commodity)
     except FileNotFoundError:
         st.error(f"Excel file not found at:\n`{EXCEL_PATH}`")
         st.stop()
     except Exception as exc:
-        st.error(f"Error loading data: {exc}")
+        st.error(f"Error loading {cfg['label']} data: {exc}")
         st.stop()
 
-    # ── Stat tiles ───────────────────────────────────────────────────────
-    tile_stats = _compute_tile_stats(df, use_bushels, unit_factor)
+    FIELDS         = cfg["fields"]
+    MAR_FEB_FIELDS = cfg["mar_feb_fields"]
+
+    # ── Stat tiles ────────────────────────────────────────────────────────
+    tile_stats = _compute_tile_stats(df, use_bushels, unit_factor, cfg,
+                                     arbr_oct_sep=arbr_oct_sep)
     st.markdown(
         _tile_row(tile_stats, "monthly", unit_short, unit_decimals,
                   f"Most Recent Monthly Shipments  ({unit_short})"),
@@ -987,20 +828,23 @@ def main():
 
     # ── Country / Category filter ─────────────────────────────────────────
     st.markdown("#### Select Country or Category")
-    if "field" not in st.session_state:
-        st.session_state["field"] = "US"
+    field_key = f"{pfx}_field"
+    if field_key not in st.session_state:
+        st.session_state[field_key] = "US"
 
     filter_cols = st.columns(len(FIELDS))
     for i, (fk, fl) in enumerate(FIELDS.items()):
         with filter_cols[i]:
-            btn_type = "primary" if st.session_state["field"] == fk else "secondary"
-            if st.button(fl, key=f"btn_{fk}", type=btn_type, use_container_width=True):
-                st.session_state["field"] = fk
+            btn_type = "primary" if st.session_state[field_key] == fk else "secondary"
+            if st.button(fl, key=f"{pfx}_btn_{fk}", type=btn_type,
+                         use_container_width=True):
+                st.session_state[field_key] = fk
                 st.rerun()
 
-    field       = st.session_state["field"]
+    field       = st.session_state[field_key]
     field_label = FIELDS[field]
-    mar_feb     = field in MAR_FEB_FIELDS
+    # Honour the AR/BR Oct-Sep toggle when determining which MY convention to use
+    mar_feb     = field in MAR_FEB_FIELDS and not arbr_oct_sep
     months      = MAR_FEB_MONTHS if mar_feb else OCT_SEP_MONTHS
     last_month  = "Feb" if mar_feb else "Sep"
     my_label    = "Mar–Feb" if mar_feb else "Oct–Sep"
@@ -1013,36 +857,36 @@ def main():
 
     if not all_years:
         st.warning("No valid marketing-year data found.")
-        st.stop()
+        return
 
     cy = all_years[-1]
     ly = all_years[-2] if len(all_years) >= 2 else None
 
-    # Complete years = all years except CY (used for stats)
     complete_years = get_complete_years(monthly_pivot, last_month)
-    # Remove CY from complete years if present (stats are prior-years only)
     complete_years = [y for y in complete_years if y != cy]
+    oly_years  = sorted(complete_years)[-6:]
+    oly_label  = " → ".join(oly_years) if oly_years else "N/A"
 
-    oly_years   = sorted(complete_years)[-6:]
-    oly_label   = " → ".join(oly_years) if oly_years else "N/A"
-
-    # ── Unit conversion (apply BEFORE cumulative build & stats) ──────────
     if use_bushels:
         monthly_pivot = _apply_unit(monthly_pivot, unit_factor)
 
     cum_pivot     = build_cumulative_pivot(monthly_pivot, all_years, months)
     monthly_stats = compute_stats(monthly_pivot, all_years, complete_years,
                                   cy, ly, months, is_cumulative=False)
-    cum_stats     = compute_stats(cum_pivot,     all_years, complete_years,
+    cum_stats     = compute_stats(cum_pivot, all_years, complete_years,
                                   cy, ly, months, is_cumulative=True)
 
     # ── Info strip ────────────────────────────────────────────────────────
+    is_import_field = field in cfg["import_fields"]
+    flow_type = "Import" if is_import_field else "Export"
     st.markdown(f"""
     <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
                 margin:10px 0 6px 0;font-family:Arial;font-size:13px;
                 display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;
                 border-left:3px solid {JSA_GREEN};">
-        <span>📊 <b style="color:#fff;">Showing:</b> {field_label}</span>
+        <span>📊 <b style="color:#fff;">Showing:</b> {field_label}
+          {"&nbsp;<span style='color:#e57373;font-size:11px;'>(import data)</span>"
+           if is_import_field else ""}</span>
         <span>📐 <b style="color:#fff;">Units:</b>
               <span style="color:{JSA_CYAN};font-weight:700;">{unit_long}</span></span>
         <span>📅 <b style="color:#fff;">Marketing Year:</b> {my_label}</span>
@@ -1071,42 +915,44 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Tabs ─────────────────────────────────────────────────────────────
+    # ── Monthly / Cumulative tabs ─────────────────────────────────────────
     tab1, tab2 = st.tabs(["📊  Monthly Shipments", "📈  Cumulative Shipments"])
 
     with tab1:
         st.markdown(
-            f"**Monthly — {field_label}** &nbsp;({unit_short}) &nbsp;|&nbsp; {my_label} marketing year &nbsp;|&nbsp;"
-            f" Stats (Min / Max / Oly Avg) reflect prior marketing years only.",
+            f"**Monthly — {field_label}** &nbsp;({unit_short}) &nbsp;|&nbsp; "
+            f"{my_label} marketing year &nbsp;|&nbsp; "
+            f"Stats reflect prior marketing years only.",
             unsafe_allow_html=True,
         )
         st.markdown(
-            render_table_html(monthly_pivot, monthly_stats, all_years, cy, ly, months,
-                              decimals=unit_decimals),
+            render_table_html(monthly_pivot, monthly_stats, all_years,
+                              cy, ly, months, decimals=unit_decimals),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
-                                field_label, False, months, logo_white_b64,
-                                unit_short=unit_short),
+                                field_label, False, months,
+                                logo_white_b64, unit_short=unit_short),
             use_container_width=True,
         )
 
     with tab2:
         st.markdown(
-            f"**Cumulative — {field_label}** &nbsp;({unit_short}) &nbsp;|&nbsp; {my_label} marketing year &nbsp;|&nbsp;"
-            f" Stats reflect prior marketing years only.",
+            f"**Cumulative — {field_label}** &nbsp;({unit_short}) &nbsp;|&nbsp; "
+            f"{my_label} marketing year &nbsp;|&nbsp; "
+            f"Stats reflect prior marketing years only.",
             unsafe_allow_html=True,
         )
         st.markdown(
-            render_table_html(cum_pivot, cum_stats, all_years, cy, ly, months,
-                              decimals=unit_decimals),
+            render_table_html(cum_pivot, cum_stats, all_years,
+                              cy, ly, months, decimals=unit_decimals),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
-                                field_label, True, months, logo_white_b64,
-                                unit_short=unit_short),
+                                field_label, True, months,
+                                logo_white_b64, unit_short=unit_short),
             use_container_width=True,
         )
 
@@ -1114,17 +960,7 @@ def main():
     st.markdown("---")
     st.markdown("### 📊 Volume Comparison by Month")
 
-    # Country colors used consistently across comparison chart
-    COUNTRY_COLORS = {
-        "US":            "#f9a825",   # gold
-        "Brazil":        "#1b7e35",   # green
-        "Argentina":     "#4fc3f7",   # sky blue
-        "Ukraine":       "#fdd835",   # yellow
-        "TotalNonUS":    "#7e57c2",   # purple
-        "MajorExporter": "#ef5350",   # red
-    }
-
-    # ── Controls row ─────────────────────────────────────────────────────
+    COUNTRY_COLORS = cfg["country_colors"]
     ctrl_ctry, ctrl_yr, ctrl_type = st.columns([2, 3, 1])
 
     with ctrl_ctry:
@@ -1134,33 +970,29 @@ def main():
             default=[field],
             max_selections=2,
             format_func=lambda k: FIELDS[k],
-            key="cmp_countries",
+            key=f"{pfx}_cmp_countries",
         )
-
     with ctrl_type:
         cmp_mode    = st.radio("Data type", ["Monthly", "Cumulative"],
-                               key="cmp_mode", horizontal=False)
+                               key=f"{pfx}_cmp_mode", horizontal=False)
     use_cum_cmp = cmp_mode == "Cumulative"
     lbl_cum     = "Cumulative " if use_cum_cmp else ""
 
     multi_country = len(set(cmp_countries)) > 1
 
-    # ── TWO-COUNTRY MODE ─────────────────────────────────────────────────
+    # TWO-COUNTRY MODE
     if multi_country:
         with ctrl_yr:
             st.caption(
                 "ℹ️ Two-country comparison uses **Oct–Sep** marketing year "
                 "for both to keep things consistent."
             )
-            # Build Oct-Sep year list from raw data (US convention)
             _, oct_sep_years = build_pivot(df, "US")
-            cmp_single_year = st.selectbox(
-                "Marketing year",
-                options=oct_sep_years[::-1],   # newest first
-                key="cmp_single_year",
+            cmp_single_year  = st.selectbox(
+                "Marketing year", options=oct_sep_years[::-1],
+                key=f"{pfx}_cmp_single_year",
             )
 
-        # Build Oct-Sep pivot for each selected country
         fig = go.Figure()
         for fk in cmp_countries:
             p, _ = build_pivot(df, fk)
@@ -1170,12 +1002,9 @@ def main():
                 p = build_cumulative_pivot(p, oct_sep_years, OCT_SEP_MONTHS)
             vals = [p[m].get(cmp_single_year) for m in OCT_SEP_MONTHS]
             fig.add_trace(go.Bar(
-                x=OCT_SEP_MONTHS, y=vals,
-                name=FIELDS[fk],
-                marker_color=COUNTRY_COLORS.get(fk, "#aaaaaa"),
-                opacity=0.88,
+                x=OCT_SEP_MONTHS, y=vals, name=FIELDS[fk],
+                marker_color=COUNTRY_COLORS.get(fk, "#aaaaaa"), opacity=0.88,
             ))
-
         fig.update_layout(
             barmode="group",
             **_base_layout(
@@ -1186,37 +1015,32 @@ def main():
         _add_chart_watermark(fig, logo_white_b64)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── SINGLE-COUNTRY MODE ───────────────────────────────────────────────
+    # SINGLE-COUNTRY MODE
     else:
         cmp_field = cmp_countries[0] if cmp_countries else field
 
-        # Rebuild pivot/stats only if the chart country differs from the main filter
         if cmp_field == field:
-            c_pivot_m   = monthly_pivot
-            c_pivot_c   = cum_pivot
-            c_all_years = all_years
-            c_stats_m   = monthly_stats
-            c_stats_c   = cum_stats
-            c_cy        = cy
-            c_months    = months
+            c_pivot_m, c_pivot_c = monthly_pivot, cum_pivot
+            c_all_years, c_cy, c_months = all_years, cy, months
+            c_stats_m, c_stats_c = monthly_stats, cum_stats
         else:
-            c_mar_feb   = cmp_field in MAR_FEB_FIELDS
-            c_months    = MAR_FEB_MONTHS if c_mar_feb else OCT_SEP_MONTHS
-            c_last_m    = "Feb" if c_mar_feb else "Sep"
-            if c_mar_feb:
-                c_pivot_m, c_all_years = build_arbr_pivot(df, cmp_field)
-            else:
-                c_pivot_m, c_all_years = build_pivot(df, cmp_field)
-            c_cy       = c_all_years[-1]
-            c_ly       = c_all_years[-2] if len(c_all_years) >= 2 else None
-            c_complete = [y for y in get_complete_years(c_pivot_m, c_last_m) if y != c_cy]
+            c_mar_feb = cmp_field in MAR_FEB_FIELDS and not arbr_oct_sep
+            c_months  = MAR_FEB_MONTHS if c_mar_feb else OCT_SEP_MONTHS
+            c_last_m  = "Feb" if c_mar_feb else "Sep"
+            c_pivot_m, c_all_years = (
+                build_arbr_pivot(df, cmp_field) if c_mar_feb
+                else build_pivot(df, cmp_field)
+            )
+            c_cy      = c_all_years[-1]
+            c_ly      = c_all_years[-2] if len(c_all_years) >= 2 else None
+            c_complete= [y for y in get_complete_years(c_pivot_m, c_last_m) if y != c_cy]
             if use_bushels:
                 c_pivot_m = _apply_unit(c_pivot_m, unit_factor)
-            c_pivot_c  = build_cumulative_pivot(c_pivot_m, c_all_years, c_months)
-            c_stats_m  = compute_stats(c_pivot_m, c_all_years, c_complete,
-                                       c_cy, c_ly, c_months, is_cumulative=False)
-            c_stats_c  = compute_stats(c_pivot_c, c_all_years, c_complete,
-                                       c_cy, c_ly, c_months, is_cumulative=True)
+            c_pivot_c = build_cumulative_pivot(c_pivot_m, c_all_years, c_months)
+            c_stats_m = compute_stats(c_pivot_m, c_all_years, c_complete,
+                                      c_cy, c_ly, c_months, is_cumulative=False)
+            c_stats_c = compute_stats(c_pivot_c, c_all_years, c_complete,
+                                      c_cy, c_ly, c_months, is_cumulative=True)
 
         with ctrl_yr:
             default_yrs = [y for y in [c_cy,
@@ -1224,14 +1048,13 @@ def main():
                            if y is not None]
             cmp_years = st.multiselect(
                 "Marketing years to compare",
-                options=c_all_years,
-                default=default_yrs,
-                key="cmp_years",
+                options=c_all_years, default=default_yrs,
+                key=f"{pfx}_cmp_years",
             )
 
         st.caption(
             f"Showing: **{FIELDS[cmp_field]}** &nbsp;|&nbsp; "
-            "Dashed white line = 6-yr Olympic Avg (prior years) &nbsp;|&nbsp; "
+            "Dashed line = 6-yr Olympic Avg (prior years) &nbsp;|&nbsp; "
             "Faint band = historical Min–Max range (prior years)."
         )
 
@@ -1247,11 +1070,95 @@ def main():
         else:
             st.info("Select at least one marketing year above to display the chart.")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN APP
+# ─────────────────────────────────────────────────────────────────────────────
+def main():
+
+    logo_white_b64 = _load_logo_b64(LOGO_WHITE_PATH)
+    logo_full_b64  = _load_logo_b64(LOGO_FULL_PATH)
+
+    # ── Header ───────────────────────────────────────────────────────────
+    logo_img_tag = (
+        f'<img src="{logo_full_b64}" '
+        f'style="height:52px;width:auto;display:block;" alt="JSA Logo">'
+        if logo_full_b64 else
+        '<span style="font-size:22px;font-weight:700;color:#fff;'
+        'font-family:Georgia,serif;">JSA</span>'
+    )
+    st.markdown(f"""
+    <div style="background:#1e2124;padding:16px 28px;border-radius:10px;
+                margin-bottom:18px;border-bottom:3px solid {JSA_GREEN};
+                display:flex;align-items:center;gap:24px;">
+        <div style="flex-shrink:0;">{logo_img_tag}</div>
+        <div style="border-left:1px solid #484f56;padding-left:22px;flex:1;">
+            <h1 style="color:#fff;margin:0;font-size:24px;font-family:Arial;
+                       letter-spacing:0.3px;">
+                Global Agricultural Export Dashboard
+            </h1>
+            <p style="color:#aab4c0;margin:5px 0 0 0;font-size:12.5px;font-family:Arial;">
+                Monthly shipments in thousands of metric tons (TMT)
+                &nbsp;&nbsp;•&nbsp;&nbsp;
+                US / Ukraine / Aggregates: Oct–Sep MY
+                &nbsp;&nbsp;•&nbsp;&nbsp;
+                Argentina / Brazil: Mar–Feb MY
+            </p>
+        </div>
+        <div style="flex-shrink:0;text-align:right;">
+            <span style="display:inline-block;background:{JSA_GREEN};color:#fff;
+                         font-family:Arial;font-size:11px;font-weight:600;
+                         padding:4px 12px;border-radius:9999px;letter-spacing:0.5px;">
+                RESEARCH ANALYTICS
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Refresh + Unit toggle ─────────────────────────────────────────────
+    col_btn, col_toggle, col_note = st.columns([1, 1.6, 4.4])
+    with col_btn:
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    with col_toggle:
+        use_bushels = st.toggle(
+            "📐 Million Bushels (Mbu)",
+            value=False,
+            key="unit_toggle",
+            help=(
+                "Convert volumes to Million Bushels (Mbu).\n\n"
+                "Corn: 56 lbs/bu  →  1 TMT ≈ 0.03937 Mbu\n"
+                "Soybeans: 60 lbs/bu  →  1 TMT ≈ 0.03674 Mbu"
+            ),
+        )
+    with col_note:
+        st.caption(
+            "Reads live from the Excel file. After updating, "
+            "click **Refresh Data** — tables, stats, and charts update automatically."
+        )
+
+    unit_short    = "Mbu"  if use_bushels else "TMT"
+    unit_long     = "Million Bushels (Mbu)" if use_bushels else "Thousand Metric Tons (TMT)"
+    unit_decimals = 1      if use_bushels else 0
+
+    # ── Top-level commodity tabs ──────────────────────────────────────────
+    corn_tab, soy_tab = st.tabs(["🌽  Corn", "🫘  Soybeans"])
+
+    with corn_tab:
+        _run_commodity_tab("corn", use_bushels, unit_short,
+                           unit_decimals, unit_long, logo_white_b64)
+
+    with soy_tab:
+        _run_commodity_tab("soybeans", use_bushels, unit_short,
+                           unit_decimals, unit_long, logo_white_b64)
+
     # ── Footer ────────────────────────────────────────────────────────────
     footer_logo = (
         f'<img src="{logo_white_b64}" style="height:36px;width:auto;opacity:0.85;" alt="JSA">'
         if logo_white_b64 else
-        '<span style="font-family:Georgia,serif;font-size:18px;font-weight:700;color:#fff;">JSA</span>'
+        '<span style="font-family:Georgia,serif;font-size:18px;font-weight:700;'
+        'color:#fff;">JSA</span>'
     )
     st.markdown(f"""
     <div style="background:{JSA_DARK};border-top:3px solid {JSA_GREEN};
@@ -1261,24 +1168,20 @@ def main():
         <div style="display:flex;align-items:center;gap:18px;">
             {footer_logo}
             <div style="border-left:1px solid #484f56;padding-left:18px;">
-                <div style="color:#fff;font-size:13px;font-weight:600;
-                            letter-spacing:0.3px;">John Stewart and Associates</div>
+                <div style="color:#fff;font-size:13px;font-weight:600;">
+                    John Stewart and Associates</div>
                 <div style="color:#7a8a9a;font-size:11px;margin-top:3px;">
-                    Commodity Research &amp; Analytics
-                </div>
+                    Commodity Research &amp; Analytics</div>
             </div>
         </div>
         <div style="text-align:center;color:#5a6a7a;font-size:11px;line-height:1.6;">
-            📁 Source: Corn Exporter Dashboard Data.xlsx
-            &nbsp;|&nbsp; Marketing Year: {my_label}<br>
+            📁 Source: Corn Exporter Dashboard Data.xlsx<br>
             Stats reflect prior completed marketing years only — current year excluded.
         </div>
         <div style="text-align:right;color:#5a6a7a;font-size:11px;line-height:1.6;">
             <a href="https://www.jpsi.com" target="_blank"
                style="color:{JSA_CYAN};text-decoration:none;font-weight:600;">
-               jpsi.com
-            </a><br>
-            info@jpsi.com
+               jpsi.com</a><br>info@jpsi.com
         </div>
     </div>
     """, unsafe_allow_html=True)

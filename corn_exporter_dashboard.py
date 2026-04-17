@@ -147,11 +147,53 @@ COMMODITY_CONFIG = {
         },
         "bu_lbs": 60.0,   # lbs per bushel of soybeans
     },
+    "soybeanmeal": {
+        "sheet":          "Meal",
+        "emoji":          "🌾",
+        "label":          "Soybean Meal",
+        # 6 raw columns only — TotalNonUS & MajorExporter are computed
+        "col_names":      ["MarketYear","Date","Month","US","Brazil","Argentina"],
+        "numeric_cols":   ["US","Brazil","Argentina"],
+        "fields": {
+            "US":            "United States",
+            "Brazil":        "Brazil",
+            "Argentina":     "Argentina",
+            "TotalNonUS":    "Total Non-US",
+            "MajorExporter": "Major Exporters",
+        },
+        "mar_feb_fields":   {"Brazil","Argentina"},
+        "arbr_months":      APR_MAR_MONTHS,
+        "arbr_last_month":  "Mar",
+        "arbr_label":       "Apr–Mar",
+        "arbr_prev_months": frozenset({"Jan","Feb","Mar"}),
+        "import_fields":    set(),
+        "non_us_comps":     ["Brazil","Argentina"],
+        "major_comps":      ["US","Brazil","Argentina"],
+        "tile_order":       ["US","Brazil","Argentina","TotalNonUS","MajorExporter"],
+        "tile_accents": {
+            "US":            "#f9a825",
+            "Brazil":        "#43a047",
+            "Argentina":     "#29b6f6",
+            "TotalNonUS":    "#8d6e63",
+            "MajorExporter": "#ef6c00",
+        },
+        "country_colors": {
+            "US":            "#f9a825",
+            "Brazil":        "#43a047",
+            "Argentina":     "#4fc3f7",
+            "TotalNonUS":    "#8d6e63",
+            "MajorExporter": "#ef6c00",
+        },
+        "bu_lbs":  None,   # meal is not measured in bushels
+    },
 }
 
 
 def _bu_conv_factor(cfg: dict) -> float:
-    """TMT → Million Bushels conversion factor for this commodity."""
+    """TMT → Million Bushels conversion factor for this commodity.
+    Returns 1.0 for commodities with no bushel equivalent (e.g. soybean meal)."""
+    if not cfg.get("bu_lbs"):
+        return 1.0
     return 1_000 * (2_204.62 / cfg["bu_lbs"]) / 1_000_000
 
 
@@ -861,7 +903,13 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     cfg = COMMODITY_CONFIG[commodity]
     pfx = commodity   # namespace all widget keys
 
-    # Per-commodity unit factor (different bu_lbs for corn vs soybeans)
+    # Per-commodity unit factor — meal has no bushel equivalent so always TMT
+    supports_bushels = bool(cfg.get("bu_lbs"))
+    if not supports_bushels:
+        use_bushels   = False
+        unit_short    = "TMT"
+        unit_long     = "Thousand Metric Tons (TMT)"
+        unit_decimals = 0
     unit_factor = _bu_conv_factor(cfg) if use_bushels else 1.0
 
     # ── AR/BR marketing-year convention toggle ────────────────────────────
@@ -1182,7 +1230,7 @@ def main():
                 &nbsp;&nbsp;•&nbsp;&nbsp;
                 US / Ukraine / Aggregates: Oct–Sep MY
                 &nbsp;&nbsp;•&nbsp;&nbsp;
-                Corn AR/BR: Mar–Feb MY &nbsp;•&nbsp; Soybeans AR/BR: Apr–Mar MY
+                Corn AR/BR: Mar–Feb MY &nbsp;•&nbsp; Soybeans &amp; Meal AR/BR: Apr–Mar MY
             </p>
         </div>
         <div style="flex-shrink:0;text-align:right;">
@@ -1224,7 +1272,9 @@ def main():
     unit_decimals = 1      if use_bushels else 0
 
     # ── Top-level commodity tabs ──────────────────────────────────────────
-    corn_tab, soy_tab = st.tabs(["🌽  Corn", "🫘  Soybeans"])
+    corn_tab, soy_tab, meal_tab = st.tabs(
+        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal"]
+    )
 
     with corn_tab:
         _run_commodity_tab("corn", use_bushels, unit_short,
@@ -1232,6 +1282,10 @@ def main():
 
     with soy_tab:
         _run_commodity_tab("soybeans", use_bushels, unit_short,
+                           unit_decimals, unit_long, logo_white_b64)
+
+    with meal_tab:
+        _run_commodity_tab("soybeanmeal", use_bushels, unit_short,
                            unit_decimals, unit_long, logo_white_b64)
 
     # ── Footer ────────────────────────────────────────────────────────────

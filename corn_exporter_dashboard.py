@@ -1128,7 +1128,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                            if y is not None]
             cmp_years = st.multiselect(
                 "Marketing years to compare",
-                options=c_all_years, default=default_yrs,
+                options=c_all_years[::-1], default=default_yrs,
                 key=f"{pfx}_cmp_years",
             )
 

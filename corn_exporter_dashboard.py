@@ -303,7 +303,7 @@ def build_arbr_pivot(df: pd.DataFrame, field: str,
             continue
         val   = row[field]
         year  = date.year
-        start = year - 1 if month in prev_months else year
+        start = year - 2 if month in prev_months else year - 1
         label = f"{start}/{str(start + 1)[-2:]}"
         if label not in pivot[month]:
             pivot[month][label] = None if pd.isna(val) else float(val)

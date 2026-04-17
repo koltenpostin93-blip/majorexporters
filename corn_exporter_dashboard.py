@@ -415,19 +415,37 @@ def compute_stats(data_pivot, all_years, complete_years, cy, ly,
     clean_ht    = [v for v in hist_totals if v is not None]
     oly_t       = olympic_avg([totals.get(y) for y in oly_years])
 
-    # Running average of each reported month's % change — more meaningful
-    # mid-year than comparing a partial cumulative total to a full prior year.
-    m_pcts_ly  = [stats[m]["pct_vs_ly"]  for m in months if stats[m]["pct_vs_ly"]  is not None]
-    m_pcts_oly = [stats[m]["pct_vs_oly"] for m in months if stats[m]["pct_vs_oly"] is not None]
-    avg_pct_ly  = sum(m_pcts_ly)  / len(m_pcts_ly)  if m_pcts_ly  else None
-    avg_pct_oly = sum(m_pcts_oly) / len(m_pcts_oly) if m_pcts_oly else None
+    # Find the latest month CY has reported, then compare CY / LY / Oly Avg
+    # all at that same reference month — always apples-to-apples mid-year.
+    cy_reported = [m for m in months if data_pivot[m].get(cy) is not None]
+    latest_m    = cy_reported[-1] if cy_reported else None
+    m_idx       = months.index(latest_m) if latest_m is not None else -1
+    months_thru = months[: m_idx + 1]
+
+    if latest_m is not None:
+        if is_cumulative:
+            # For cumulative pivot, value at latest_m IS the running total
+            cy_ref  = data_pivot[latest_m].get(cy)
+            ly_ref  = data_pivot[latest_m].get(ly) if ly else None
+            oly_ref = olympic_avg([data_pivot[latest_m].get(y) for y in oly_years])
+        else:
+            # For monthly pivot, sum only the months CY has reported
+            def _sum_thru(year):
+                nv = [v for m in months_thru
+                      if (v := data_pivot[m].get(year)) is not None]
+                return sum(nv) if nv else None
+            cy_ref  = _sum_thru(cy)
+            ly_ref  = _sum_thru(ly) if ly else None
+            oly_ref = olympic_avg([_sum_thru(y) for y in oly_years])
+    else:
+        cy_ref = ly_ref = oly_ref = None
 
     stats["TOTAL"] = dict(
         oly_avg    = oly_t,
         min        = min(clean_ht) if clean_ht else None,
         max        = max(clean_ht) if clean_ht else None,
-        pct_vs_ly  = avg_pct_ly,
-        pct_vs_oly = avg_pct_oly,
+        pct_vs_ly  = _pct(cy_ref, ly_ref),
+        pct_vs_oly = _pct(cy_ref, oly_ref),
     )
     stats["_totals"] = totals
     return stats

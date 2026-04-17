@@ -414,12 +414,20 @@ def compute_stats(data_pivot, all_years, complete_years, cy, ly,
     hist_totals = [totals.get(y) for y in hist_years]
     clean_ht    = [v for v in hist_totals if v is not None]
     oly_t       = olympic_avg([totals.get(y) for y in oly_years])
+
+    # Running average of each reported month's % change — more meaningful
+    # mid-year than comparing a partial cumulative total to a full prior year.
+    m_pcts_ly  = [stats[m]["pct_vs_ly"]  for m in months if stats[m]["pct_vs_ly"]  is not None]
+    m_pcts_oly = [stats[m]["pct_vs_oly"] for m in months if stats[m]["pct_vs_oly"] is not None]
+    avg_pct_ly  = sum(m_pcts_ly)  / len(m_pcts_ly)  if m_pcts_ly  else None
+    avg_pct_oly = sum(m_pcts_oly) / len(m_pcts_oly) if m_pcts_oly else None
+
     stats["TOTAL"] = dict(
         oly_avg    = oly_t,
         min        = min(clean_ht) if clean_ht else None,
         max        = max(clean_ht) if clean_ht else None,
-        pct_vs_ly  = _pct(totals.get(cy), totals.get(ly) if ly else None),
-        pct_vs_oly = _pct(totals.get(cy), oly_t),
+        pct_vs_ly  = avg_pct_ly,
+        pct_vs_oly = avg_pct_oly,
     )
     stats["_totals"] = totals
     return stats

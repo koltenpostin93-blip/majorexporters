@@ -1303,6 +1303,324 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MARKETING YEARS REFERENCE TAB
+# ─────────────────────────────────────────────────────────────────────────────
+def _render_my_reference_tab():
+    """Render the static Marketing Years Reference tab."""
+
+    now    = pd.Timestamp.now()
+    yr, mo = now.year, now.month
+
+    # ── Compute current MY start-year for each convention ─────────────────
+    def _my(start): return f"{start}/{str(start + 1)[-2:]}"
+
+    usda_s = yr if mo >= 10 else yr - 1          # Oct–Sep
+    us_s   = yr if mo >= 9  else yr - 1          # Sep–Aug
+    # AR/BR year_offset=-1: non-prev → year-1; prev months → year-2
+    mf_s   = yr - 1 if mo not in (1, 2)    else yr - 2   # Mar–Feb (prev={Jan,Feb})
+    am_s   = yr - 1 if mo not in (1, 2, 3) else yr - 2   # Apr–Mar (prev={Jan,Feb,Mar})
+
+    CONVS = [
+        dict(
+            name   = "USDA Standard",
+            conv   = "Oct–Sep",
+            months = OCT_SEP_MONTHS,
+            color  = "#0693e3",
+            used   = "US · Ukraine · Total Non-US · Major Exporters · China Imports",
+            my     = _my(usda_s),
+            period = f"Oct {usda_s} – Sep {usda_s + 1}",
+        ),
+        dict(
+            name   = "US Local",
+            conv   = "Sep–Aug",
+            months = SEP_AUG_MONTHS,
+            color  = "#f9a825",
+            used   = "United States — Corn, Soybeans, Soybean Meal",
+            my     = _my(us_s),
+            period = f"Sep {us_s} – Aug {us_s + 1}",
+        ),
+        dict(
+            name   = "AR/BR Corn Local",
+            conv   = "Mar–Feb",
+            months = MAR_FEB_MONTHS,
+            color  = "#43a047",
+            used   = "Argentina & Brazil — Corn",
+            my     = _my(mf_s),
+            period = f"Mar {mf_s + 1} – Feb {mf_s + 2}",
+        ),
+        dict(
+            name   = "AR/BR Soy / Meal Local",
+            conv   = "Apr–Mar",
+            months = APR_MAR_MONTHS,
+            color  = "#29b6f6",
+            used   = "Argentina & Brazil — Soybeans & Soybean Meal",
+            my     = _my(am_s),
+            period = f"Apr {am_s + 1} – Mar {am_s + 2}",
+        ),
+    ]
+
+    # ── Header ────────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="background:#1e2124;padding:18px 24px;border-radius:8px;
+                margin-bottom:20px;border-left:4px solid {JSA_GREEN};">
+      <h2 style="color:#fff;margin:0 0 7px;font-family:Arial;font-size:20px;">
+        📅 Marketing Year Reference
+      </h2>
+      <p style="color:#aab4c0;margin:0;font-size:12.5px;font-family:Arial;line-height:1.65;">
+        Each country's <b style="color:#fff;">marketing year (MY)</b> is anchored to its
+        local planting &amp; harvest calendar. The dashboard defaults to each country's
+        <b style="color:#fff;">Local MY</b>. Toggle <em>Local MY</em> off on any commodity
+        tab to align all countries to the
+        <b style="color:{JSA_CYAN};">USDA standard Oct–Sep</b>
+        for apples-to-apples cross-country comparisons.
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Convention overview cards (row of 4) ──────────────────────────────
+    card_cols = st.columns(4)
+    for i, c in enumerate(CONVS):
+        with card_cols[i]:
+            st.markdown(f"""
+            <div style="background:#21262c;border:1px solid #2e353d;
+                        border-top:3px solid {c['color']};border-radius:6px;
+                        padding:14px 14px 12px;font-family:Arial;height:100%;">
+              <div style="color:{c['color']};font-size:10.5px;font-weight:700;
+                          text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;">
+                {c['name']}
+              </div>
+              <div style="color:#fff;font-size:24px;font-weight:700;
+                          font-family:Arial;line-height:1.1;margin-bottom:8px;">
+                {c['conv']}
+              </div>
+              <div style="color:#aab4c0;font-size:11.5px;margin-bottom:2px;">
+                <b style="color:#ccc;">Current MY:</b>&nbsp;
+                <span style="color:{JSA_CYAN};font-weight:700;">{c['my']}</span>
+              </div>
+              <div style="color:#7a8a9a;font-size:11px;margin-bottom:10px;">
+                {c['period']}
+              </div>
+              <div style="padding-top:8px;border-top:1px solid #2e353d;
+                          color:#606e7e;font-size:10.5px;line-height:1.5;">
+                {c['used']}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin:22px 0 6px;'></div>", unsafe_allow_html=True)
+
+    # ── Month-sequence strips ─────────────────────────────────────────────
+    st.markdown(
+        '<div style="color:#fff;font-family:Arial;font-size:13px;font-weight:700;'
+        'margin-bottom:6px;">Month Sequence by Convention</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="color:#707a88;font-family:Arial;font-size:11px;margin-bottom:10px;">'
+        '● = start of marketing year &nbsp;|&nbsp; '
+        'Brighter cells = first calendar year of MY &nbsp;|&nbsp; '
+        'Dimmer cells = second calendar year &nbsp;|&nbsp; '
+        '<span style="border-left:2px solid rgba(255,255,255,0.45);'
+        'padding-left:5px;">Jan boundary marks the calendar-year rollover</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    strips = '<div style="font-family:Arial;">'
+    for c in CONVS:
+        months  = c["months"]
+        color   = c["color"]
+        jan_idx = months.index("Jan")
+
+        cells = ""
+        for i, m in enumerate(months):
+            is_start = i == 0
+            is_end   = i == len(months) - 1
+            is_cy1   = i < jan_idx
+            is_jan   = m == "Jan"
+            bg       = f"{color}62" if is_cy1 else f"{color}2e"
+            fw       = "700" if is_start else "400"
+            b_left   = "border-left:2px solid rgba(255,255,255,0.38);" if is_jan else ""
+            dot_l    = (f'<span style="color:{color};font-size:7px;'
+                        f'vertical-align:middle;margin-right:1px;">●</span>'
+                        if is_start else "")
+            dot_r    = (f'<span style="color:{color};font-size:7px;'
+                        f'vertical-align:middle;margin-left:1px;">●</span>'
+                        if is_end else "")
+            cells += (
+                f'<div style="flex:1;min-width:0;text-align:center;'
+                f'padding:6px 1px 5px;background:{bg};color:#dce4ec;'
+                f'font-size:10.5px;font-weight:{fw};{b_left}'
+                f'border-right:1px solid #151a1f;">'
+                f'{dot_l}{m}{dot_r}</div>'
+            )
+
+        strips += f"""
+        <div style="display:flex;align-items:stretch;margin-bottom:3px;">
+          <div style="width:178px;min-width:178px;background:#1a1e22;
+                      padding:7px 12px;border-left:3px solid {color};
+                      border-radius:3px 0 0 3px;
+                      display:flex;flex-direction:column;justify-content:center;">
+            <div style="color:#fff;font-size:10.5px;font-weight:700;">{c['name']}</div>
+            <div style="color:{color};font-size:9.5px;margin-top:2px;">{c['conv']}
+              &nbsp;<span style="color:#5a6878;font-weight:400;">MY {c['my']}</span>
+            </div>
+          </div>
+          <div style="flex:1;display:flex;border-radius:0 3px 3px 0;overflow:hidden;
+                      border:1px solid #2e353d;border-left:none;">
+            {cells}
+          </div>
+        </div>
+        """
+    strips += "</div>"
+    st.markdown(strips, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin:24px 0 6px;'></div>", unsafe_allow_html=True)
+
+    # ── Commodity × Country matrix ────────────────────────────────────────
+    st.markdown(
+        '<div style="color:#fff;font-family:Arial;font-size:13px;font-weight:700;'
+        'margin-bottom:10px;">Commodity &amp; Country Matrix</div>',
+        unsafe_allow_html=True,
+    )
+
+    MATRIX = [
+        # (Commodity, Country, local_conv, lcolor, local_my, local_period, usda_period)
+        ("🌽 Corn",         "United States",
+         "Sep–Aug",  "#f9a825", _my(us_s),
+         f"Sep {us_s} – Aug {us_s+1}",        f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌽 Corn",         "Brazil",
+         "Mar–Feb",  "#43a047", _my(mf_s),
+         f"Mar {mf_s+1} – Feb {mf_s+2}",      f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌽 Corn",         "Argentina",
+         "Mar–Feb",  "#43a047", _my(mf_s),
+         f"Mar {mf_s+1} – Feb {mf_s+2}",      f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌽 Corn",         "Ukraine",
+         "Oct–Sep",  "#0693e3", _my(usda_s),
+         f"Oct {usda_s} – Sep {usda_s+1}",     f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌽 Corn",         "Total Non-US / Major Exporters",
+         "Oct–Sep",  "#0693e3", _my(usda_s),
+         f"Oct {usda_s} – Sep {usda_s+1}",     f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🫘 Soybeans",     "United States",
+         "Sep–Aug",  "#f9a825", _my(us_s),
+         f"Sep {us_s} – Aug {us_s+1}",         f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🫘 Soybeans",     "Brazil",
+         "Apr–Mar",  "#29b6f6", _my(am_s),
+         f"Apr {am_s+1} – Mar {am_s+2}",       f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🫘 Soybeans",     "Argentina",
+         "Apr–Mar",  "#29b6f6", _my(am_s),
+         f"Apr {am_s+1} – Mar {am_s+2}",       f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🫘 Soybeans",     "Total Non-US / Major Exporters / China Imports",
+         "Oct–Sep",  "#0693e3", _my(usda_s),
+         f"Oct {usda_s} – Sep {usda_s+1}",     f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌾 Soybean Meal", "United States",
+         "Sep–Aug",  "#f9a825", _my(us_s),
+         f"Sep {us_s} – Aug {us_s+1}",         f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌾 Soybean Meal", "Brazil",
+         "Apr–Mar",  "#29b6f6", _my(am_s),
+         f"Apr {am_s+1} – Mar {am_s+2}",       f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌾 Soybean Meal", "Argentina",
+         "Apr–Mar",  "#29b6f6", _my(am_s),
+         f"Apr {am_s+1} – Mar {am_s+2}",       f"Oct {usda_s} – Sep {usda_s+1}"),
+        ("🌾 Soybean Meal", "Total Non-US / Major Exporters",
+         "Oct–Sep",  "#0693e3", _my(usda_s),
+         f"Oct {usda_s} – Sep {usda_s+1}",     f"Oct {usda_s} – Sep {usda_s+1}"),
+    ]
+
+    tbl_rows = ""
+    prev_comm = ""
+    for comm, country, lconv, lcol, lmy, lperiod, uperiod in MATRIX:
+        is_first   = comm != prev_comm
+        row_bg     = "#21262c" if is_first else "#1d2227"
+        top_bdr    = "border-top:2px solid #353d45;" if is_first else ""
+        comm_cell  = (
+            f'<td style="padding:8px 14px;font-weight:700;color:#e8edf2;'
+            f'white-space:nowrap;font-size:12px;{top_bdr}">{comm}</td>'
+            if is_first else
+            f'<td style="padding:8px 14px;color:#2e353d;font-size:12px;">&nbsp;</td>'
+        )
+        same_as_usda = lconv == "Oct–Sep"
+        local_badge = (
+            f'<span style="background:{lcol}22;color:{lcol};padding:2px 8px;'
+            f'border-radius:3px;font-weight:600;font-size:11px;">{lconv}</span>'
+            f'&nbsp;<span style="color:#4a5668;font-size:10.5px;">'
+            f'{"(same as USDA)" if same_as_usda else ""}</span>'
+        )
+        usda_badge = (
+            f'<span style="background:#0693e322;color:#0693e3;padding:2px 8px;'
+            f'border-radius:3px;font-weight:600;font-size:11px;">Oct–Sep</span>'
+        )
+        tbl_rows += f"""
+        <tr style="background:{row_bg};">
+          {comm_cell}
+          <td style="padding:8px 14px;color:#c8d4e0;font-size:12px;{top_bdr}">{country}</td>
+          <td style="padding:8px 14px;font-size:12px;{top_bdr}">{local_badge}</td>
+          <td style="padding:8px 14px;color:#7a8a9a;font-size:11px;{top_bdr}">{lmy}&nbsp;·&nbsp;{lperiod}</td>
+          <td style="padding:8px 14px;font-size:12px;{top_bdr}">{usda_badge}</td>
+          <td style="padding:8px 14px;color:#7a8a9a;font-size:11px;{top_bdr}">{_my(usda_s)}&nbsp;·&nbsp;{uperiod}</td>
+        </tr>
+        """
+        prev_comm = comm
+
+    matrix_html = f"""
+    <div style="overflow-x:auto;border-radius:6px;border:1px solid #2e353d;
+                font-family:Arial;margin-bottom:8px;">
+      <table style="border-collapse:collapse;width:100%;min-width:700px;">
+        <thead>
+          <tr style="background:#151a1f;">
+            <th style="padding:9px 14px;text-align:left;color:#aab4c0;font-size:10.5px;
+                       text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:2px solid {JSA_CYAN};">Commodity</th>
+            <th style="padding:9px 14px;text-align:left;color:#aab4c0;font-size:10.5px;
+                       text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:2px solid {JSA_CYAN};">Country / Category</th>
+            <th style="padding:9px 14px;text-align:left;color:#aab4c0;font-size:10.5px;
+                       text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:2px solid {JSA_CYAN};">Local MY</th>
+            <th style="padding:9px 14px;text-align:left;color:#aab4c0;font-size:10.5px;
+                       text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:2px solid {JSA_CYAN};">Current Local Period</th>
+            <th style="padding:9px 14px;text-align:left;color:#aab4c0;font-size:10.5px;
+                       text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:2px solid {JSA_CYAN};">USDA MY</th>
+            <th style="padding:9px 14px;text-align:left;color:#aab4c0;font-size:10.5px;
+                       text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:2px solid {JSA_CYAN};">Current USDA Period</th>
+          </tr>
+        </thead>
+        <tbody>{tbl_rows}</tbody>
+      </table>
+    </div>
+    """
+    st.markdown(matrix_html, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin:20px 0 8px;'></div>", unsafe_allow_html=True)
+
+    # ── USDA PSD link banner ──────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="background:#1a1e22;border:1px solid #2e353d;
+                border-left:4px solid {JSA_CYAN};border-radius:6px;
+                padding:14px 20px;font-family:Arial;">
+      <div style="color:#fff;font-weight:700;font-size:13px;margin-bottom:5px;">
+        🌐 USDA Production, Supply &amp; Distribution (PSD) Database
+      </div>
+      <div style="color:#8a9aaa;font-size:12px;margin-bottom:10px;line-height:1.55;">
+        The authoritative source for global agricultural supply &amp; demand data,
+        marketing year definitions, and the historical export figures used in this dashboard.
+        Use the PSD app to verify marketing year conventions and download custom datasets.
+      </div>
+      <a href="https://apps.fas.usda.gov/psdonline/app/index.html#/app/downloads"
+         target="_blank"
+         style="display:inline-block;background:{JSA_CYAN};color:#fff;font-weight:600;
+                font-size:12px;padding:7px 18px;border-radius:4px;
+                text-decoration:none;letter-spacing:0.3px;">
+        Open USDA PSD App ↗
+      </a>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
@@ -1375,8 +1693,8 @@ def main():
     unit_decimals = 1      if use_bushels else 0
 
     # ── Top-level commodity tabs ──────────────────────────────────────────
-    corn_tab, soy_tab, meal_tab = st.tabs(
-        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal"]
+    corn_tab, soy_tab, meal_tab, ref_tab = st.tabs(
+        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "📅  Marketing Years"]
     )
 
     with corn_tab:
@@ -1390,6 +1708,9 @@ def main():
     with meal_tab:
         _run_commodity_tab("soybeanmeal", use_bushels, unit_short,
                            unit_decimals, unit_long, logo_white_b64)
+
+    with ref_tab:
+        _render_my_reference_tab()
 
     # ── Footer ────────────────────────────────────────────────────────────
     footer_logo = (

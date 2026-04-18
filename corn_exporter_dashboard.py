@@ -294,7 +294,7 @@ COMMODITY_CONFIG = {
                            "Argentina","Australia","Brazil"],
         "major_comps":    ["US","Canada","EU","Russia","Ukraine","India","China",
                            "Argentina","Australia","Brazil"],
-        "tile_order":     ["US","Canada","EU","Russia","Ukraine","India","China",
+        "tile_order":     ["US","Canada","EU","Russia","Ukraine","China",
                            "Argentina","Australia","Brazil","TotalNonUS","MajorExporter"],
         "tile_accents": {
             "US":            "#f9a825",
@@ -1258,9 +1258,11 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
 # SNAPSHOT DATA HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 def _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
-                            selected_year=None) -> list:
+                            selected_year=None, use_local_my=False) -> list:
     """
-    Compute per-country snapshot stats always using USDA Oct–Sep MY.
+    Compute per-country snapshot stats.
+    use_local_my=False (default) → USDA Oct–Sep for all countries.
+    use_local_my=True            → US uses Sep–Aug, AR/BR use Mar–Feb or Apr–Mar.
     selected_year=None  → CY MYTD (latest reported month per country).
     selected_year=str   → full MY total for that prior year.
     Returns list of {field, label, pct_avg, pct_ly, cum_val, year}.
@@ -1268,24 +1270,44 @@ def _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
     result = []
     for field in cfg["tile_order"]:
         try:
-            pivot, all_years = build_pivot(df, field)
+            if use_local_my and field == "US":
+                pivot, all_years = build_arbr_pivot(
+                    df, field,
+                    months_list=cfg["us_local_months"],
+                    prev_months=cfg["us_local_prev_months"],
+                    year_offset=0,
+                )
+                months_list = cfg["us_local_months"]
+                last_month  = cfg["us_local_last_month"]
+            elif use_local_my and field in cfg["mar_feb_fields"]:
+                pivot, all_years = build_arbr_pivot(
+                    df, field,
+                    months_list=cfg["arbr_months"],
+                    prev_months=cfg["arbr_prev_months"],
+                )
+                months_list = cfg["arbr_months"]
+                last_month  = cfg["arbr_last_month"]
+            else:
+                pivot, all_years = build_pivot(df, field)
+                months_list = OCT_SEP_MONTHS
+                last_month  = "Sep"
         except Exception:
             continue
         if not all_years:
             continue
         if use_bushels:
             pivot = _apply_unit(pivot, unit_factor)
-        cum_piv  = build_cumulative_pivot(pivot, all_years, OCT_SEP_MONTHS)
+        cum_piv  = build_cumulative_pivot(pivot, all_years, months_list)
         cy       = all_years[-1]
         ly       = all_years[-2] if len(all_years) >= 2 else None
-        complete = [y for y in get_complete_years(pivot, "Sep") if y != cy]
+        complete = [y for y in get_complete_years(pivot, last_month) if y != cy]
 
         if selected_year is None:
             # Current year: find latest reported cumulative month
             year     = cy
             ref_ly   = ly
             latest_m = None
-            for m in reversed(OCT_SEP_MONTHS):
+            for m in reversed(months_list):
                 if cum_piv[m].get(cy) is not None:
                     latest_m = m
                     break
@@ -1301,20 +1323,20 @@ def _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
                 continue
             yr_idx = all_years.index(year)
             ref_ly = all_years[yr_idx - 1] if yr_idx > 0 else None
-            # Full MY total: use cumulative at Sep; fallback to latest available
-            cum_val = cum_piv["Sep"].get(year)
+            # Full MY total at last month of this MY; fallback to latest available
+            cum_val = cum_piv[last_month].get(year)
             if cum_val is None:
-                for m in reversed(OCT_SEP_MONTHS):
+                for m in reversed(months_list):
                     v = cum_piv[m].get(year)
                     if v is not None:
                         cum_val = v
                         break
             if cum_val is None:
                 continue
-            ly_val  = cum_piv["Sep"].get(ref_ly) if ref_ly else None
+            ly_val  = cum_piv[last_month].get(ref_ly) if ref_ly else None
             prior   = [y for y in complete if y != year]
             oly_yrs = sorted(prior)[-6:]
-            oly_val = olympic_avg([cum_piv["Sep"].get(y) for y in oly_yrs])
+            oly_val = olympic_avg([cum_piv[last_month].get(y) for y in oly_yrs])
 
         result.append(dict(
             field   = field,
@@ -1492,24 +1514,40 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     _snap_opts   = [f"Current Year YTD ({_snap_cy})"] + _snap_prior if _snap_cy else []
 
     if _snap_opts:
-        _snap_sel = st.selectbox(
-            "Marketing Year",
-            options=_snap_opts,
-            index=0,
-            key=f"{pfx}_snap_year",
-            help=(
-                "**Current Year YTD** — cumulative shipments through the most recent "
-                "reported month for each country.\n\n"
-                "**Prior years** — full marketing year total (USDA Oct–Sep)."
-            ),
-        )
+        _snap_ctrl1, _snap_ctrl2 = st.columns([3, 1])
+        with _snap_ctrl1:
+            _snap_sel = st.selectbox(
+                "Marketing Year",
+                options=_snap_opts,
+                index=0,
+                key=f"{pfx}_snap_year",
+                help=(
+                    "**Current Year YTD** — cumulative shipments through the most "
+                    "recent reported month for each country.\n\n"
+                    "**Prior years** — full marketing year total."
+                ),
+            )
+        with _snap_ctrl2:
+            _snap_local_my = st.toggle(
+                "Local MY",
+                value=False,
+                key=f"{pfx}_snap_local_my",
+                help=(
+                    "**OFF** (default) — USDA Oct–Sep for all countries.\n\n"
+                    f"**ON** — US uses Sep–Aug; "
+                    f"AR/BR use {cfg['arbr_label']} (local harvest MY)."
+                ),
+            )
+
         _is_cy_snap = _snap_sel.startswith("Current Year")
         _sel_yr     = None if _is_cy_snap else _snap_sel
-        _snap_label = (f"CY {_snap_cy} (YTD, USDA Oct–Sep)"
-                       if _is_cy_snap else f"Full MY {_snap_sel} (USDA Oct–Sep)")
+        _my_tag     = f"Local MY" if _snap_local_my else "USDA Oct–Sep"
+        _snap_label = (f"CY {_snap_cy} (YTD, {_my_tag})"
+                       if _is_cy_snap else f"Full MY {_snap_sel} ({_my_tag})")
 
         _snap_data = _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
-                                            selected_year=_sel_yr)
+                                            selected_year=_sel_yr,
+                                            use_local_my=_snap_local_my)
         if _snap_data:
             st.plotly_chart(
                 make_snapshot_chart(_snap_data, cfg["label"], _snap_label,

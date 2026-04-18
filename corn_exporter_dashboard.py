@@ -417,13 +417,43 @@ def load_data(commodity: str) -> pd.DataFrame:
                 os.remove(tmp_path)
             except Exception:
                 pass
-    # For wheat (many countries), only read columns that actually exist in the file.
+    # For wheat, map whatever header names are in the Excel to our internal
+    # field names, then keep only recognised columns.
     # For other commodities use the exact positional slice as before.
     if commodity == "wheat":
-        raw_cols   = list(df.columns)
-        avail      = [c for c in cfg["col_names"] if c in raw_cols]
-        df         = df[[c for c in raw_cols if c in avail]].copy()
-        df.columns = [c for c in cfg["col_names"] if c in raw_cols]
+        _WHEAT_HEADER_MAP = {
+            # Date / Month
+            "Date": "Date", "Month": "Month",
+            "MarketYear": "MarketYear", "Market Year": "MarketYear",
+            # United States
+            "US": "US", "U.S.": "US", "United States": "US", "USA": "US",
+            # Canada
+            "Canada": "Canada",
+            # EU
+            "EU": "EU", "E.U.": "EU", "European Union": "EU", "Euro Union": "EU",
+            # Russia
+            "Russia": "Russia", "Russian Federation": "Russia",
+            # Ukraine
+            "Ukraine": "Ukraine",
+            # India
+            "India": "India",
+            # China
+            "China": "China", "China (Mainland)": "China",
+            # Argentina
+            "Argentina": "Argentina",
+            # Australia
+            "Australia": "Australia",
+            # Brazil
+            "Brazil": "Brazil",
+            # Aggregates
+            "TotalNonUS": "TotalNonUS", "Total Non-US": "TotalNonUS",
+            "Total Non US": "TotalNonUS", "Non-US Total": "TotalNonUS",
+            "MajorExporter": "MajorExporter", "Major Exporters": "MajorExporter",
+            "Major Exporter": "MajorExporter",
+        }
+        df = df.rename(columns=_WHEAT_HEADER_MAP)
+        keep = [c for c in cfg["col_names"] if c in df.columns]
+        df   = df[keep].copy()
     else:
         n   = len(cfg["col_names"])
         df  = df.iloc[:, :n].copy()
@@ -1599,6 +1629,15 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 
     # Only expose fields that actually exist in the loaded dataframe
     FIELDS = {k: v for k, v in cfg["fields"].items() if k in df.columns}
+
+    # Diagnostic: if no country columns matched, show actual Excel headers
+    if not FIELDS:
+        st.error(
+            f"**No country columns matched.** "
+            f"Excel headers found: `{list(df.columns)}`\n\n"
+            f"Expected one of: `{list(cfg['fields'].keys())}`"
+        )
+        st.stop()
 
     # ── Stat tiles ───────────────────────────────────────────────────────
     tile_stats = _compute_wheat_tile_stats(

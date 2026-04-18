@@ -57,6 +57,7 @@ JSA_MID   = "#2a2f35"
 OCT_SEP_MONTHS = ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
 MAR_FEB_MONTHS = ["Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb"]
 APR_MAR_MONTHS = ["Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar"]
+SEP_AUG_MONTHS = ["Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug"]
 ALL_MONTHS     = set(OCT_SEP_MONTHS)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,6 +84,10 @@ COMMODITY_CONFIG = {
         "arbr_last_month":  "Feb",
         "arbr_label":       "Mar–Feb",
         "arbr_prev_months": frozenset({"Jan","Feb"}),
+        "us_local_months":      SEP_AUG_MONTHS,
+        "us_local_last_month":  "Aug",
+        "us_local_label":       "Sep–Aug",
+        "us_local_prev_months": frozenset({"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug"}),
         "import_fields":  set(),
         "non_us_comps":   ["Brazil","Argentina","Ukraine"],
         "major_comps":    ["US","Brazil","Argentina","Ukraine"],
@@ -125,6 +130,10 @@ COMMODITY_CONFIG = {
         "arbr_last_month":  "Mar",
         "arbr_label":       "Apr–Mar",
         "arbr_prev_months": frozenset({"Jan","Feb","Mar"}),
+        "us_local_months":      SEP_AUG_MONTHS,
+        "us_local_last_month":  "Aug",
+        "us_local_label":       "Sep–Aug",
+        "us_local_prev_months": frozenset({"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug"}),
         "import_fields":  {"ChinaImports"},
         "non_us_comps":   ["Brazil","Argentina"],
         "major_comps":    ["US","Brazil","Argentina"],
@@ -166,6 +175,10 @@ COMMODITY_CONFIG = {
         "arbr_last_month":  "Mar",
         "arbr_label":       "Apr–Mar",
         "arbr_prev_months": frozenset({"Jan","Feb","Mar"}),
+        "us_local_months":      SEP_AUG_MONTHS,
+        "us_local_last_month":  "Aug",
+        "us_local_label":       "Sep–Aug",
+        "us_local_prev_months": frozenset({"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug"}),
         "import_fields":    set(),
         "non_us_comps":     ["Brazil","Argentina"],
         "major_comps":      ["US","Brazil","Argentina"],
@@ -324,12 +337,18 @@ def build_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
 
 def build_arbr_pivot(df: pd.DataFrame, field: str,
                      months_list=None,
-                     prev_months=None) -> tuple[dict, list[str]]:
+                     prev_months=None,
+                     year_offset: int = -1) -> tuple[dict, list[str]]:
     """
-    Build a marketing-year pivot for AR/BR fields.
-    months_list : ordered list of months for this MY (e.g. MAR_FEB_MONTHS or APR_MAR_MONTHS)
-    prev_months : months that belong to the *previous* marketing year label
-                  (Jan+Feb for Mar-Feb; Jan+Feb+Mar for Apr-Mar)
+    Build a marketing-year pivot keyed by derived year label.
+
+    months_list  : ordered month list for this MY convention
+    prev_months  : months that belong to the *previous* MY label
+    year_offset  : controls the year-label formula:
+                     -1  Southern Hemisphere planting convention (AR/BR default)
+                         non-prev → year-1,  prev → year-2
+                      0  Standard convention (US Sep-Aug)
+                         non-prev → year,    prev → year-1
     """
     if months_list is None:
         months_list = MAR_FEB_MONTHS
@@ -345,7 +364,8 @@ def build_arbr_pivot(df: pd.DataFrame, field: str,
             continue
         val   = row[field]
         year  = date.year
-        start = year - 2 if month in prev_months else year - 1
+        start = (year + year_offset - 1) if month in prev_months \
+                else (year + year_offset)
         label = f"{start}/{str(start + 1)[-2:]}"
         if label not in pivot[month]:
             pivot[month][label] = None if pd.isna(val) else float(val)
@@ -757,21 +777,35 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
 # STAT TILES
 # ─────────────────────────────────────────────────────────────────────────────
 def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
-                        arbr_oct_sep: bool = False) -> list:
+                        arbr_local_my: bool = True,
+                        us_local_my: bool = True) -> list:
     tiles = []
     for field in cfg["tile_order"]:
-        # If the user toggled Oct-Sep for AR/BR, treat those fields as Oct-Sep too
-        mar_feb     = field in cfg["mar_feb_fields"] and not arbr_oct_sep
-        months_list = cfg["arbr_months"] if mar_feb else OCT_SEP_MONTHS
-        last_month  = cfg["arbr_last_month"] if mar_feb else "Sep"
-        my_label    = cfg["arbr_label"] if mar_feb else "Oct–Sep"
-
-        pivot, all_years = (
-            build_arbr_pivot(df, field,
-                             months_list=cfg["arbr_months"],
-                             prev_months=cfg["arbr_prev_months"])
-            if mar_feb else build_pivot(df, field)
-        )
+        # Determine marketing year convention for this field
+        if field == "US" and us_local_my:
+            months_list = cfg["us_local_months"]
+            last_month  = cfg["us_local_last_month"]
+            my_label    = f"Local ({cfg['us_local_label']})"
+            pivot, all_years = build_arbr_pivot(
+                df, field,
+                months_list=cfg["us_local_months"],
+                prev_months=cfg["us_local_prev_months"],
+                year_offset=0,
+            )
+        elif field in cfg["mar_feb_fields"] and arbr_local_my:
+            months_list = cfg["arbr_months"]
+            last_month  = cfg["arbr_last_month"]
+            my_label    = f"Local ({cfg['arbr_label']})"
+            pivot, all_years = build_arbr_pivot(
+                df, field,
+                months_list=cfg["arbr_months"],
+                prev_months=cfg["arbr_prev_months"],
+            )
+        else:
+            months_list = OCT_SEP_MONTHS
+            last_month  = "Sep"
+            my_label    = "USDA (Oct–Sep)"
+            pivot, all_years = build_pivot(df, field)
         if not all_years:
             tiles.append(None)
             continue
@@ -938,18 +972,32 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         unit_decimals = 0
     unit_factor = _bu_conv_factor(cfg) if use_bushels else 1.0
 
-    # ── AR/BR marketing-year convention toggle ────────────────────────────
-    arbr_oct_sep: bool = st.toggle(
-        f"🗓️  Argentina & Brazil: use Oct–Sep MY",
-        value=False,
-        key=f"{pfx}_arbr_oct_sep",
-        help=(
-            f"By default Argentina & Brazil use a **{cfg['arbr_label']}** "
-            f"marketing year for {cfg['label']}.\n\n"
-            "Enable this to align them with the **Oct–Sep** convention used by "
-            "the US and aggregates — useful for apples-to-apples comparisons."
-        ),
-    )
+    # ── Marketing-year convention toggles ─────────────────────────────────
+    tog_col1, tog_col2 = st.columns(2)
+    with tog_col1:
+        arbr_local_my: bool = st.toggle(
+            f"🌎  AR/BR: Local MY ({cfg['arbr_label']})",
+            value=True,
+            key=f"{pfx}_arbr_local_my",
+            help=(
+                f"**ON** (default) — Argentina & Brazil use their native "
+                f"**{cfg['arbr_label']}** marketing year for {cfg['label']}.\n\n"
+                "**OFF** — Aligns them with the USDA **Oct–Sep** convention "
+                "for apples-to-apples cross-country comparisons."
+            ),
+        )
+    with tog_col2:
+        us_local_my: bool = st.toggle(
+            "🇺🇸  US: Local MY (Sep–Aug)",
+            value=True,
+            key=f"{pfx}_us_local_my",
+            help=(
+                "**ON** (default) — United States uses its native **Sep–Aug** "
+                "marketing year.\n\n"
+                "**OFF** — Aligns the US with the USDA **Oct–Sep** convention "
+                "for apples-to-apples cross-country comparisons."
+            ),
+        )
 
     # ── Load data ─────────────────────────────────────────────────────────
     try:
@@ -966,7 +1014,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
     # ── Stat tiles ────────────────────────────────────────────────────────
     tile_stats = _compute_tile_stats(df, use_bushels, unit_factor, cfg,
-                                     arbr_oct_sep=arbr_oct_sep)
+                                     arbr_local_my=arbr_local_my,
+                                     us_local_my=us_local_my)
     st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
                 unsafe_allow_html=True)
     st.markdown(
@@ -991,14 +1040,30 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
     field       = st.session_state[field_key]
     field_label = FIELDS[field]
-    # Honour the AR/BR Oct-Sep toggle when determining which MY convention to use
-    mar_feb    = field in MAR_FEB_FIELDS and not arbr_oct_sep
-    months     = cfg["arbr_months"] if mar_feb else OCT_SEP_MONTHS
-    last_month = cfg["arbr_last_month"] if mar_feb else "Sep"
-    my_label   = cfg["arbr_label"] if mar_feb else "Oct–Sep"
+
+    # Determine marketing year convention for the selected field
+    if field == "US" and us_local_my:
+        months     = cfg["us_local_months"]
+        last_month = cfg["us_local_last_month"]
+        my_label   = f"Local ({cfg['us_local_label']})"
+    elif field in MAR_FEB_FIELDS and arbr_local_my:
+        months     = cfg["arbr_months"]
+        last_month = cfg["arbr_last_month"]
+        my_label   = f"Local ({cfg['arbr_label']})"
+    else:
+        months     = OCT_SEP_MONTHS
+        last_month = "Sep"
+        my_label   = "USDA (Oct–Sep)"
 
     # ── Build pivots ──────────────────────────────────────────────────────
-    if mar_feb:
+    if field == "US" and us_local_my:
+        monthly_pivot, all_years = build_arbr_pivot(
+            df, field,
+            months_list=cfg["us_local_months"],
+            prev_months=cfg["us_local_prev_months"],
+            year_offset=0,
+        )
+    elif field in MAR_FEB_FIELDS and arbr_local_my:
         monthly_pivot, all_years = build_arbr_pivot(
             df, field,
             months_list=cfg["arbr_months"],
@@ -1136,7 +1201,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     if multi_country:
         with ctrl_yr:
             st.caption(
-                "ℹ️ Two-country comparison uses **Oct–Sep** marketing year "
+                "ℹ️ Two-country comparison uses **USDA (Oct–Sep)** marketing year "
                 "for both to keep things consistent."
             )
             _, oct_sep_years = build_pivot(df, "US")
@@ -1176,15 +1241,27 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
             c_all_years, c_cy, c_months = all_years, cy, months
             c_stats_m, c_stats_c = monthly_stats, cum_stats
         else:
-            c_mar_feb = cmp_field in MAR_FEB_FIELDS and not arbr_oct_sep
-            c_months  = cfg["arbr_months"] if c_mar_feb else OCT_SEP_MONTHS
-            c_last_m  = cfg["arbr_last_month"] if c_mar_feb else "Sep"
-            c_pivot_m, c_all_years = (
-                build_arbr_pivot(df, cmp_field,
-                                 months_list=cfg["arbr_months"],
-                                 prev_months=cfg["arbr_prev_months"])
-                if c_mar_feb else build_pivot(df, cmp_field)
-            )
+            if cmp_field == "US" and us_local_my:
+                c_months  = cfg["us_local_months"]
+                c_last_m  = cfg["us_local_last_month"]
+                c_pivot_m, c_all_years = build_arbr_pivot(
+                    df, cmp_field,
+                    months_list=cfg["us_local_months"],
+                    prev_months=cfg["us_local_prev_months"],
+                    year_offset=0,
+                )
+            elif cmp_field in MAR_FEB_FIELDS and arbr_local_my:
+                c_months  = cfg["arbr_months"]
+                c_last_m  = cfg["arbr_last_month"]
+                c_pivot_m, c_all_years = build_arbr_pivot(
+                    df, cmp_field,
+                    months_list=cfg["arbr_months"],
+                    prev_months=cfg["arbr_prev_months"],
+                )
+            else:
+                c_months  = OCT_SEP_MONTHS
+                c_last_m  = "Sep"
+                c_pivot_m, c_all_years = build_pivot(df, cmp_field)
             c_cy      = c_all_years[-1]
             c_ly      = c_all_years[-2] if len(c_all_years) >= 2 else None
             c_complete= [y for y in get_complete_years(c_pivot_m, c_last_m) if y != c_cy]
@@ -1254,9 +1331,9 @@ def main():
             <p style="color:#aab4c0;margin:5px 0 0 0;font-size:12.5px;font-family:Arial;">
                 Monthly shipments in thousands of metric tons (TMT)
                 &nbsp;&nbsp;•&nbsp;&nbsp;
-                US / Ukraine / Aggregates: Oct–Sep MY
+                Default: Local MY per country (US: Sep–Aug · Corn AR/BR: Mar–Feb · Soy &amp; Meal AR/BR: Apr–Mar)
                 &nbsp;&nbsp;•&nbsp;&nbsp;
-                Corn AR/BR: Mar–Feb MY &nbsp;•&nbsp; Soybeans &amp; Meal AR/BR: Apr–Mar MY
+                Toggle off Local MY to align with USDA Oct–Sep for cross-country comparisons
             </p>
         </div>
         <div style="flex-shrink:0;text-align:right;">

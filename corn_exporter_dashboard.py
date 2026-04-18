@@ -835,6 +835,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             line=dict(color="rgba(0,0,0,0)"),
             name=f"±1 Std Dev ({len(hist_8)} yr)",
             hoverinfo="skip", showlegend=True,
+            legendrank=900,
         ))
 
     oly_6 = sorted(complete_years)[-6:]
@@ -845,12 +846,22 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             name="6-Yr Olympic Avg",
             line=dict(color="#0693e3", width=2.5, dash="dash"),
             marker=dict(symbol="diamond", size=6, color="#0693e3"),
+            legendrank=800,
         ))
 
+    # Build year draw order (oldest first for rendering so newer lines sit on top)
     draw_order = [y for y in all_years if y != cy and y != ly]
     if ly:
         draw_order.append(ly)
     draw_order.append(cy)
+
+    # Legend rank: CY=1 (top), LY=2, then historical newest→oldest (3, 4, 5…)
+    hist_years_newest_first = [y for y in reversed(all_years) if y != cy and y != ly]
+    legend_rank = {cy: 1}
+    if ly:
+        legend_rank[ly] = 2
+    for rank, yr in enumerate(hist_years_newest_first, start=3):
+        legend_rank[yr] = rank
 
     for year in draw_order:
         vals  = [data_pivot[m].get(year) for m in months]
@@ -861,6 +872,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             line=dict(color=color, width=width),
             marker=dict(size=5 if is_key else 3, color=color),
             opacity=opacity, connectgaps=False,
+            legendrank=legend_rank.get(year, 500),
         ))
 
     fig.update_layout(**_base_layout(

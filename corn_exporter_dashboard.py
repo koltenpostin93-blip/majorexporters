@@ -432,6 +432,13 @@ def load_data(commodity: str) -> pd.DataFrame:
     if "MarketYear" in df.columns:
         df["MarketYear"] = df["MarketYear"].astype(str).str.strip()
     df["Month"] = df["Month"].astype(str).str.strip()
+    # Normalise full month names → 3-letter abbreviations (e.g. "January" → "Jan")
+    _FULL_TO_ABB = {
+        "January":"Jan","February":"Feb","March":"Mar","April":"Apr",
+        "May":"May","June":"Jun","July":"Jul","August":"Aug",
+        "September":"Sep","October":"Oct","November":"Nov","December":"Dec",
+    }
+    df["Month"] = df["Month"].replace(_FULL_TO_ABB)
     df["Date"]       = pd.to_datetime(df["Date"], errors="coerce")
     df = df[df["Month"].isin(ALL_MONTHS)].copy()
     for col in cfg["numeric_cols"]:

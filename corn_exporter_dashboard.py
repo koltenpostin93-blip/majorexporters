@@ -209,7 +209,8 @@ COMMODITY_CONFIG = {
         "label":        "Wheat",
         # Adjust col_names to match your Excel column order exactly.
         # Remove India / China / Brazil if those columns are not yet present.
-        "col_names":    ["MarketYear","Date","Month","US","Canada","EU","Russia","Ukraine",
+        # No MarketYear column needed — wheat pivots are built from the Date column.
+        "col_names":    ["Date","Month","US","Canada","EU","Russia","Ukraine",
                          "India","China","Argentina","Australia","Brazil",
                          "TotalNonUS","MajorExporter"],
         "numeric_cols": ["US","Canada","EU","Russia","Ukraine",
@@ -428,8 +429,9 @@ def load_data(commodity: str) -> pd.DataFrame:
         df  = df.iloc[:, :n].copy()
         df.columns = cfg["col_names"]
 
-    df["MarketYear"] = df["MarketYear"].astype(str).str.strip()
-    df["Month"]      = df["Month"].astype(str).str.strip()
+    if "MarketYear" in df.columns:
+        df["MarketYear"] = df["MarketYear"].astype(str).str.strip()
+    df["Month"] = df["Month"].astype(str).str.strip()
     df["Date"]       = pd.to_datetime(df["Date"], errors="coerce")
     df = df[df["Month"].isin(ALL_MONTHS)].copy()
     for col in cfg["numeric_cols"]:
@@ -1532,26 +1534,27 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     tog1, tog2 = st.columns(2)
     with tog1:
         nh_compare: bool = st.toggle(
-            "🌍  NH Countries: Jul–Jun Comparison",
+            "🌍  NH: Jul–Jun Comparison MY",
             value=False,
             key="wheat_nh_compare",
             help=(
-                "**OFF** (default) — each Northern Hemisphere country uses its own "
-                "native marketing year.\n\n"
-                "**ON** — aligns US, Canada, EU, Russia, Ukraine, India, China "
-                "to a common **Jul–Jun** window for cross-country comparisons."
+                "**OFF** (default) — each NH country shows its own Local MY:\n"
+                "US: Jun–May · Canada: Aug–Jul · EU/Russia/Ukraine: Jul–Jun · "
+                "India: Apr–Mar · China: Jun–May\n\n"
+                "**ON** — aligns all NH countries to **Jul–Jun** for "
+                "apples-to-apples cross-country comparisons."
             ),
         )
     with tog2:
         sh_compare: bool = st.toggle(
-            "🌏  SH Countries: Dec–Nov Comparison",
+            "🌏  SH: Dec–Nov Comparison MY",
             value=False,
             key="wheat_sh_compare",
             help=(
-                "**OFF** (default) — each Southern Hemisphere country uses its own "
-                "native marketing year.\n\n"
-                "**ON** — aligns Argentina, Australia, Brazil to a common "
-                "**Dec–Nov** window for cross-country comparisons."
+                "**OFF** (default) — each SH country shows its own Local MY:\n"
+                "Argentina: Dec–Nov · Australia: Dec–Nov · Brazil: Oct–Sep\n\n"
+                "**ON** — aligns all SH countries to **Dec–Nov** for "
+                "apples-to-apples cross-country comparisons."
             ),
         )
 
@@ -1817,10 +1820,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 def _render_my_reference_tab():
     """Render the Marketing Years Reference tab — one simple table per commodity."""
 
-    def _ref_table(title: str, rows: list[tuple]) -> str:
-        """
-        rows: list of (Country, Hemisphere, USDA MY, Local MY)
-        """
+    def _ref_table(title, rows):
+        """rows: list of (Country, Hemisphere, USDA MY, Local MY)"""
         hdr = "".join(
             f'<th style="padding:9px 16px;text-align:left;color:#aab4c0;'
             f'font-size:11px;text-transform:uppercase;letter-spacing:0.5px;'
@@ -2018,11 +2019,17 @@ def main():
                            unit_decimals, unit_long, logo_white_b64)
 
     with wheat_tab:
-        _run_wheat_tab(use_bushels, unit_short, unit_decimals,
-                       unit_long, logo_white_b64)
+        try:
+            _run_wheat_tab(use_bushels, unit_short, unit_decimals,
+                           unit_long, logo_white_b64)
+        except Exception as _e:
+            st.error(f"Wheat tab error: {_e}")
 
     with ref_tab:
-        _render_my_reference_tab()
+        try:
+            _render_my_reference_tab()
+        except Exception as _e:
+            st.error(f"Reference tab error: {_e}")
 
     # ── Footer ────────────────────────────────────────────────────────────
     footer_logo = (

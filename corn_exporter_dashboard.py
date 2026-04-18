@@ -1497,24 +1497,34 @@ def _compute_wheat_tile_stats(df, use_bushels, unit_factor, cfg,
             tiles.append(None)
             continue
 
-        cy             = all_years[-1]
-        ly             = all_years[-2] if len(all_years) >= 2 else None
-        complete_years = [y for y in get_complete_years(pivot, last_month) if y != cy]
-        oly_years      = sorted(complete_years)[-6:]
-
         if use_bushels:
             pivot = _apply_unit(pivot, unit_factor)
 
-        latest_month = latest_val = None
-        for m in reversed(months_list):
-            v = pivot[m].get(cy)
-            if v is not None:
-                latest_month, latest_val = m, v
+        # Search newest → oldest year to find the most recent data for this
+        # country. Countries report at different times so the latest year label
+        # may have no data yet for some exporters.
+        active_cy    = None
+        latest_month = None
+        latest_val   = None
+        for yr in reversed(all_years):
+            for m in reversed(months_list):
+                v = pivot[m].get(yr)
+                if v is not None:
+                    active_cy, latest_month, latest_val = yr, m, v
+                    break
+            if active_cy:
                 break
 
-        if latest_month is None:
+        if active_cy is None:
             tiles.append(None)
             continue
+
+        cy = active_cy
+        cy_idx = all_years.index(cy)
+        ly     = all_years[cy_idx - 1] if cy_idx > 0 else None
+
+        complete_years = [y for y in get_complete_years(pivot, last_month) if y != cy]
+        oly_years      = sorted(complete_years)[-6:]
 
         ly_m    = pivot[latest_month].get(ly) if ly else None
         oly_m   = olympic_avg([pivot[latest_month].get(y) for y in oly_years])

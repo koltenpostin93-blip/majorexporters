@@ -58,6 +58,10 @@ OCT_SEP_MONTHS = ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","A
 MAR_FEB_MONTHS = ["Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb"]
 APR_MAR_MONTHS = ["Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar"]
 SEP_AUG_MONTHS = ["Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug"]
+JUL_JUN_MONTHS = ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"]
+DEC_NOV_MONTHS = ["Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov"]
+JUN_MAY_MONTHS = ["Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May"]
+AUG_JUL_MONTHS = ["Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul"]
 ALL_MONTHS     = set(OCT_SEP_MONTHS)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -199,6 +203,127 @@ COMMODITY_CONFIG = {
         },
         "bu_lbs":  None,   # meal is not measured in bushels
     },
+    "wheat": {
+        "sheet":        "Wheat",
+        "emoji":        "🌾",
+        "label":        "Wheat",
+        # Adjust col_names to match your Excel column order exactly.
+        # Remove India / China / Brazil if those columns are not yet present.
+        "col_names":    ["MarketYear","Date","Month","US","Canada","EU","Russia","Ukraine",
+                         "India","China","Argentina","Australia","Brazil",
+                         "TotalNonUS","MajorExporter"],
+        "numeric_cols": ["US","Canada","EU","Russia","Ukraine",
+                         "India","China","Argentina","Australia","Brazil",
+                         "TotalNonUS","MajorExporter"],
+        "fields": {
+            "US":            "United States",
+            "Canada":        "Canada",
+            "EU":            "EU",
+            "Russia":        "Russia",
+            "Ukraine":       "Ukraine",
+            "India":         "India",
+            "China":         "China",
+            "Argentina":     "Argentina",
+            "Australia":     "Australia",
+            "Brazil":        "Brazil",
+            "TotalNonUS":    "Total Non-US",
+            "MajorExporter": "Major Exporters",
+        },
+        # Per-field MY convention — all wheat uses year_offset=0 in build_arbr_pivot.
+        # Aggregates (TotalNonUS, MajorExporter) are aligned to Jul-Jun (dominant NH).
+        "field_my": {
+            "US":            dict(months=JUN_MAY_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May"}),
+                                  last="May", label="Jun–May", hemisphere="North"),
+            "Canada":        dict(months=AUG_JUL_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun","Jul"}),
+                                  last="Jul", label="Aug–Jul", hemisphere="North"),
+            "EU":            dict(months=JUL_JUN_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun"}),
+                                  last="Jun", label="Jul–Jun", hemisphere="North"),
+            "Russia":        dict(months=JUL_JUN_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun"}),
+                                  last="Jun", label="Jul–Jun", hemisphere="North"),
+            "Ukraine":       dict(months=JUL_JUN_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun"}),
+                                  last="Jun", label="Jul–Jun", hemisphere="North"),
+            "India":         dict(months=APR_MAR_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar"}),
+                                  last="Mar", label="Apr–Mar", hemisphere="North"),
+            "China":         dict(months=JUN_MAY_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May"}),
+                                  last="May", label="Jun–May", hemisphere="North"),
+            "Argentina":     dict(months=DEC_NOV_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun",
+                                                  "Jul","Aug","Sep","Oct","Nov"}),
+                                  last="Nov", label="Dec–Nov", hemisphere="South"),
+            "Australia":     dict(months=DEC_NOV_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun",
+                                                  "Jul","Aug","Sep","Oct","Nov"}),
+                                  last="Nov", label="Dec–Nov", hemisphere="South"),
+            "Brazil":        dict(months=OCT_SEP_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun",
+                                                  "Jul","Aug","Sep"}),
+                                  last="Sep", label="Oct–Sep", hemisphere="South"),
+            "TotalNonUS":    dict(months=JUL_JUN_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun"}),
+                                  last="Jun", label="Jul–Jun", hemisphere="North"),
+            "MajorExporter": dict(months=JUL_JUN_MONTHS,
+                                  prev=frozenset({"Jan","Feb","Mar","Apr","May","Jun"}),
+                                  last="Jun", label="Jul–Jun", hemisphere="North"),
+        },
+        # NH comparison window (Jul–Jun)
+        "nh_months": JUL_JUN_MONTHS,
+        "nh_prev":   frozenset({"Jan","Feb","Mar","Apr","May","Jun"}),
+        "nh_last":   "Jun",
+        "nh_label":  "Jul–Jun",
+        # SH comparison window (Dec–Nov)
+        "sh_months": DEC_NOV_MONTHS,
+        "sh_prev":   frozenset({"Jan","Feb","Mar","Apr","May","Jun",
+                                "Jul","Aug","Sep","Oct","Nov"}),
+        "sh_last":   "Nov",
+        "sh_label":  "Dec–Nov",
+        "nh_fields": {"US","Canada","EU","Russia","Ukraine","India","China",
+                      "TotalNonUS","MajorExporter"},
+        "sh_fields": {"Argentina","Australia","Brazil"},
+        "mar_feb_fields": set(),
+        "import_fields":  set(),
+        "non_us_comps":   ["Canada","EU","Russia","Ukraine","India","China",
+                           "Argentina","Australia","Brazil"],
+        "major_comps":    ["US","Canada","EU","Russia","Ukraine","India","China",
+                           "Argentina","Australia","Brazil"],
+        "tile_order":     ["US","Canada","EU","Russia","Ukraine","India","China",
+                           "Argentina","Australia","Brazil","TotalNonUS","MajorExporter"],
+        "tile_accents": {
+            "US":            "#f9a825",
+            "Canada":        "#ef5350",
+            "EU":            "#1565c0",
+            "Russia":        "#78909c",
+            "Ukraine":       "#fdd835",
+            "India":         "#ff6d00",
+            "China":         "#b71c1c",
+            "Argentina":     "#29b6f6",
+            "Australia":     "#00897b",
+            "Brazil":        "#43a047",
+            "TotalNonUS":    "#7e57c2",
+            "MajorExporter": "#ef6c00",
+        },
+        "country_colors": {
+            "US":            "#f9a825",
+            "Canada":        "#ef5350",
+            "EU":            "#1565c0",
+            "Russia":        "#78909c",
+            "Ukraine":       "#fdd835",
+            "India":         "#ff6d00",
+            "China":         "#b71c1c",
+            "Argentina":     "#4fc3f7",
+            "Australia":     "#4db6ac",
+            "Brazil":        "#43a047",
+            "TotalNonUS":    "#7e57c2",
+            "MajorExporter": "#ef6c00",
+        },
+        "bu_lbs": 60.0,   # lbs per bushel of wheat
+    },
 }
 
 
@@ -291,9 +416,18 @@ def load_data(commodity: str) -> pd.DataFrame:
                 os.remove(tmp_path)
             except Exception:
                 pass
-    n   = len(cfg["col_names"])
-    df  = df.iloc[:, :n].copy()
-    df.columns = cfg["col_names"]
+    # For wheat (many countries), only read columns that actually exist in the file.
+    # For other commodities use the exact positional slice as before.
+    if commodity == "wheat":
+        raw_cols   = list(df.columns)
+        avail      = [c for c in cfg["col_names"] if c in raw_cols]
+        df         = df[[c for c in raw_cols if c in avail]].copy()
+        df.columns = [c for c in cfg["col_names"] if c in raw_cols]
+    else:
+        n   = len(cfg["col_names"])
+        df  = df.iloc[:, :n].copy()
+        df.columns = cfg["col_names"]
+
     df["MarketYear"] = df["MarketYear"].astype(str).str.strip()
     df["Month"]      = df["Month"].astype(str).str.strip()
     df["Date"]       = pd.to_datetime(df["Date"], errors="coerce")
@@ -307,15 +441,18 @@ def load_data(commodity: str) -> pd.DataFrame:
 def _enforce_aggregate_completeness(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """
     Recompute TotalNonUS and MajorExporter from components.
-    Null out any row where a required component is missing.
+    Only uses component columns that actually exist in the dataframe
+    (handles wheat where some country columns may not be present yet).
     """
     df = df.copy()
-    non_us_cols = cfg["non_us_comps"]
-    major_cols  = cfg["major_comps"]
-    all_non_us  = df[non_us_cols].notna().all(axis=1)
-    all_major   = df[major_cols].notna().all(axis=1)
-    df["TotalNonUS"]    = np.where(all_non_us, df[non_us_cols].sum(axis=1), np.nan)
-    df["MajorExporter"] = np.where(all_major,  df[major_cols].sum(axis=1),  np.nan)
+    non_us_cols = [c for c in cfg["non_us_comps"] if c in df.columns]
+    major_cols  = [c for c in cfg["major_comps"]  if c in df.columns]
+    if non_us_cols:
+        all_non_us = df[non_us_cols].notna().all(axis=1)
+        df["TotalNonUS"] = np.where(all_non_us, df[non_us_cols].sum(axis=1), np.nan)
+    if major_cols:
+        all_major = df[major_cols].notna().all(axis=1)
+        df["MajorExporter"] = np.where(all_major, df[major_cols].sum(axis=1), np.nan)
     return df
 
 
@@ -1303,6 +1440,378 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# WHEAT TAB
+# ─────────────────────────────────────────────────────────────────────────────
+def _get_wheat_field_my(field: str, cfg: dict,
+                        nh_compare: bool, sh_compare: bool) -> tuple:
+    """Return (months, prev_months, last_month, my_label) for a wheat field."""
+    fmy = cfg["field_my"][field]
+    hem = fmy["hemisphere"]
+    if hem == "North" and nh_compare:
+        return (cfg["nh_months"], cfg["nh_prev"], cfg["nh_last"],
+                f"NH Compare ({cfg['nh_label']})")
+    if hem == "South" and sh_compare:
+        return (cfg["sh_months"], cfg["sh_prev"], cfg["sh_last"],
+                f"SH Compare ({cfg['sh_label']})")
+    return fmy["months"], fmy["prev"], fmy["last"], fmy["label"]
+
+
+def _compute_wheat_tile_stats(df, use_bushels, unit_factor, cfg,
+                              nh_compare, sh_compare) -> list:
+    tiles = []
+    for field in cfg["tile_order"]:
+        if field not in df.columns:
+            tiles.append(None)
+            continue
+        months_list, prev_months, last_month, my_label = _get_wheat_field_my(
+            field, cfg, nh_compare, sh_compare
+        )
+        pivot, all_years = build_arbr_pivot(
+            df, field,
+            months_list=months_list,
+            prev_months=prev_months,
+            year_offset=0,
+        )
+        if not all_years:
+            tiles.append(None)
+            continue
+
+        cy             = all_years[-1]
+        ly             = all_years[-2] if len(all_years) >= 2 else None
+        complete_years = [y for y in get_complete_years(pivot, last_month) if y != cy]
+        oly_years      = sorted(complete_years)[-6:]
+
+        if use_bushels:
+            pivot = _apply_unit(pivot, unit_factor)
+
+        latest_month = latest_val = None
+        for m in reversed(months_list):
+            v = pivot[m].get(cy)
+            if v is not None:
+                latest_month, latest_val = m, v
+                break
+
+        if latest_month is None:
+            tiles.append(None)
+            continue
+
+        ly_m    = pivot[latest_month].get(ly) if ly else None
+        oly_m   = olympic_avg([pivot[latest_month].get(y) for y in oly_years])
+        cum_piv = build_cumulative_pivot(pivot, all_years, months_list)
+        cy_cum  = cum_piv[latest_month].get(cy)
+        ly_cum  = cum_piv[latest_month].get(ly) if ly else None
+        oly_cum = olympic_avg([cum_piv[latest_month].get(y) for y in oly_years])
+
+        tiles.append(dict(
+            field        = field,
+            label        = cfg["fields"][field],
+            my_label     = my_label,
+            cy           = cy,
+            latest_month = latest_month,
+            accent       = cfg["tile_accents"].get(field, JSA_CYAN),
+            is_import    = False,
+            monthly_val  = latest_val,
+            pct_ly_m     = _pct(latest_val, ly_m),
+            pct_oly_m    = _pct(latest_val, oly_m),
+            cum_val      = cy_cum,
+            pct_ly_c     = _pct(cy_cum, ly_cum),
+            pct_oly_c    = _pct(cy_cum, oly_cum),
+        ))
+    return tiles
+
+
+def _run_wheat_tab(use_bushels: bool, unit_short: str,
+                   unit_decimals: int, unit_long: str,
+                   logo_white_b64: str | None):
+    """Render the full Wheat dashboard tab."""
+    cfg         = COMMODITY_CONFIG["wheat"]
+    pfx         = "wheat"
+    unit_factor = _bu_conv_factor(cfg) if use_bushels else 1.0
+
+    # ── Hemisphere comparison toggles ────────────────────────────────────
+    tog1, tog2 = st.columns(2)
+    with tog1:
+        nh_compare: bool = st.toggle(
+            "🌍  NH Countries: Jul–Jun Comparison",
+            value=False,
+            key="wheat_nh_compare",
+            help=(
+                "**OFF** (default) — each Northern Hemisphere country uses its own "
+                "native marketing year.\n\n"
+                "**ON** — aligns US, Canada, EU, Russia, Ukraine, India, China "
+                "to a common **Jul–Jun** window for cross-country comparisons."
+            ),
+        )
+    with tog2:
+        sh_compare: bool = st.toggle(
+            "🌏  SH Countries: Dec–Nov Comparison",
+            value=False,
+            key="wheat_sh_compare",
+            help=(
+                "**OFF** (default) — each Southern Hemisphere country uses its own "
+                "native marketing year.\n\n"
+                "**ON** — aligns Argentina, Australia, Brazil to a common "
+                "**Dec–Nov** window for cross-country comparisons."
+            ),
+        )
+
+    # ── Load data ────────────────────────────────────────────────────────
+    try:
+        df = load_data("wheat")
+    except FileNotFoundError:
+        st.error(f"Excel file not found at:\n`{EXCEL_PATH}`")
+        st.stop()
+    except Exception as exc:
+        st.error(f"Error loading Wheat data: {exc}")
+        st.stop()
+
+    # Only expose fields that actually exist in the loaded dataframe
+    FIELDS = {k: v for k, v in cfg["fields"].items() if k in df.columns}
+
+    # ── Stat tiles ───────────────────────────────────────────────────────
+    tile_stats = _compute_wheat_tile_stats(
+        df, use_bushels, unit_factor, cfg, nh_compare, sh_compare
+    )
+    st.markdown(_render_tile_grid(tile_stats, unit_short, unit_decimals),
+                unsafe_allow_html=True)
+    st.markdown(
+        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Country / Category filter ────────────────────────────────────────
+    st.markdown("#### Select Country or Category")
+    field_key = f"{pfx}_field"
+    if field_key not in st.session_state or st.session_state[field_key] not in FIELDS:
+        st.session_state[field_key] = next(iter(FIELDS))
+
+    filter_cols = st.columns(len(FIELDS))
+    for i, (fk, fl) in enumerate(FIELDS.items()):
+        with filter_cols[i]:
+            btn_type = "primary" if st.session_state[field_key] == fk else "secondary"
+            if st.button(fl, key=f"{pfx}_btn_{fk}", type=btn_type,
+                         use_container_width=True):
+                st.session_state[field_key] = fk
+                st.rerun()
+
+    field       = st.session_state[field_key]
+    field_label = FIELDS[field]
+
+    months, prev_months, last_month, my_label = _get_wheat_field_my(
+        field, cfg, nh_compare, sh_compare
+    )
+
+    # ── Build pivots ─────────────────────────────────────────────────────
+    monthly_pivot, all_years = build_arbr_pivot(
+        df, field,
+        months_list=months,
+        prev_months=prev_months,
+        year_offset=0,
+    )
+    if not all_years:
+        st.warning("No valid marketing-year data found.")
+        return
+
+    cy = all_years[-1]
+    ly = all_years[-2] if len(all_years) >= 2 else None
+
+    complete_years = [y for y in get_complete_years(monthly_pivot, last_month) if y != cy]
+    oly_years      = sorted(complete_years)[-6:]
+    oly_label      = " → ".join(oly_years) if oly_years else "N/A"
+
+    if use_bushels:
+        monthly_pivot = _apply_unit(monthly_pivot, unit_factor)
+
+    cum_pivot     = build_cumulative_pivot(monthly_pivot, all_years, months)
+    monthly_stats = compute_stats(monthly_pivot, all_years, complete_years,
+                                  cy, ly, months, is_cumulative=False)
+    cum_stats     = compute_stats(cum_pivot, all_years, complete_years,
+                                  cy, ly, months, is_cumulative=True)
+
+    # ── Info strip ───────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
+                margin:10px 0 6px 0;font-family:Arial;font-size:13px;
+                display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;
+                border-left:3px solid {JSA_GREEN};">
+        <span>📊 <b style="color:#fff;">Showing:</b> {field_label}</span>
+        <span>📐 <b style="color:#fff;">Units:</b>
+              <span style="color:{JSA_CYAN};font-weight:700;">{unit_long}</span></span>
+        <span>📅 <b style="color:#fff;">Marketing Year:</b> {my_label}</span>
+        <span>📅 <b style="color:#fff;">Current Year (CY):</b>
+              <span style="color:{JSA_CYAN};font-weight:700;">{cy}</span></span>
+        <span>📅 <b style="color:#fff;">Last Year (LY):</b> {ly or "N/A"}</span>
+        <span>📈 <b style="color:#fff;">Olympic Avg (prior yrs):</b> {oly_label}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Legend ───────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="font-family:Arial;font-size:12px;color:#aab4c0;
+                margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;
+                padding:7px 14px;background:#252a2f;border-radius:5px;">
+        <span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;
+              color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>
+        <span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;
+              color:#fff;">■</span>&nbsp;2 Highest (prior yrs)</span>
+        <span><span style="background:#c62828;padding:2px 8px;border-radius:3px;
+              color:#fff;">■</span>&nbsp;2 Lowest (prior yrs)</span>
+        <span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;
+              color:#000;">■</span>&nbsp;Stat Columns (prior yrs only)</span>
+        <span style="color:#4caf50;font-weight:600;">+x.x%</span>&nbsp;Above reference&nbsp;
+        <span style="color:#ef5350;font-weight:600;">-x.x%</span>&nbsp;Below reference
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Monthly / Cumulative tabs ─────────────────────────────────────────
+    tab1, tab2 = st.tabs(["📊  Monthly Shipments", "📈  Cumulative Shipments"])
+
+    with tab1:
+        st.markdown(
+            f"**Monthly — {field_label}** &nbsp;({unit_short}) &nbsp;|&nbsp; "
+            f"{my_label} marketing year &nbsp;|&nbsp; "
+            f"Stats reflect prior marketing years only.",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            render_table_html(monthly_pivot, monthly_stats, all_years,
+                              cy, ly, months, decimals=unit_decimals),
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(
+            make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
+                                field_label, False, months,
+                                logo_white_b64, unit_short=unit_short),
+            use_container_width=True,
+        )
+
+    with tab2:
+        st.markdown(
+            f"**Cumulative — {field_label}** &nbsp;({unit_short}) &nbsp;|&nbsp; "
+            f"{my_label} marketing year &nbsp;|&nbsp; "
+            f"Stats reflect prior marketing years only.",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            render_table_html(cum_pivot, cum_stats, all_years,
+                              cy, ly, months, decimals=unit_decimals),
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(
+            make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
+                                field_label, True, months,
+                                logo_white_b64, unit_short=unit_short),
+            use_container_width=True,
+        )
+
+    # ── Volume Comparison ────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📊 Volume Comparison by Month")
+
+    COUNTRY_COLORS = cfg["country_colors"]
+    ctrl_ctry, ctrl_yr, ctrl_type = st.columns([2, 3, 1])
+
+    with ctrl_ctry:
+        cmp_countries = st.multiselect(
+            "Countries / categories",
+            options=[k for k in FIELDS],
+            default=[field],
+            max_selections=2,
+            format_func=lambda k: FIELDS[k],
+            key=f"{pfx}_cmp_countries",
+        )
+    with ctrl_type:
+        cmp_mode    = st.radio("Data type", ["Monthly", "Cumulative"],
+                               key=f"{pfx}_cmp_mode", horizontal=False)
+    use_cum_cmp = cmp_mode == "Cumulative"
+    lbl_cum     = "Cumulative " if use_cum_cmp else ""
+
+    multi_country = len(set(cmp_countries)) > 1
+
+    if multi_country:
+        # Two-country comparison: each uses its own (or comparison-group) MY
+        fa, fb = cmp_countries[0], cmp_countries[1]
+        ma, pma, _, la = _get_wheat_field_my(fa, cfg, nh_compare, sh_compare)
+        mb, pmb, _, _  = _get_wheat_field_my(fb, cfg, nh_compare, sh_compare)
+        pa, years_a    = build_arbr_pivot(df, fa, months_list=ma, prev_months=pma, year_offset=0)
+        if use_bushels:
+            pa = _apply_unit(pa, unit_factor)
+        with ctrl_yr:
+            st.caption(f"ℹ️ Using **{la}** MY for year selection.")
+            cmp_yr = st.selectbox("Marketing year", options=years_a[::-1],
+                                  key=f"{pfx}_cmp_single_year")
+        fig = go.Figure()
+        for fk, mfk, pmfk in [(fa, ma, pma), (fb, mb, pmb)]:
+            p, yrs = build_arbr_pivot(df, fk, months_list=mfk, prev_months=pmfk, year_offset=0)
+            if use_bushels:
+                p = _apply_unit(p, unit_factor)
+            if use_cum_cmp:
+                p = build_cumulative_pivot(p, yrs, mfk)
+            vals = [p[m].get(cmp_yr) if m in p else None for m in ma]
+            fig.add_trace(go.Bar(x=ma, y=vals, name=FIELDS[fk],
+                                 marker_color=COUNTRY_COLORS.get(fk, "#aaa"), opacity=0.88))
+        fig.update_layout(barmode="group",
+                          **_base_layout(f"{lbl_cum}Country Comparison — {cmp_yr}",
+                                         "Month", f"{lbl_cum}Volume ({unit_short})"))
+        _add_chart_watermark(fig, logo_white_b64)
+        st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        cmp_field = cmp_countries[0] if cmp_countries else field
+
+        if cmp_field == field:
+            c_pivot_m, c_pivot_c = monthly_pivot, cum_pivot
+            c_all_years, c_cy, c_months = all_years, cy, months
+            c_stats_m, c_stats_c = monthly_stats, cum_stats
+        else:
+            c_months, c_pm, c_lm, _ = _get_wheat_field_my(
+                cmp_field, cfg, nh_compare, sh_compare
+            )
+            c_pivot_m, c_all_years = build_arbr_pivot(
+                df, cmp_field,
+                months_list=c_months, prev_months=c_pm, year_offset=0,
+            )
+            c_cy      = c_all_years[-1]
+            c_ly      = c_all_years[-2] if len(c_all_years) >= 2 else None
+            c_complete= [y for y in get_complete_years(c_pivot_m, c_lm) if y != c_cy]
+            if use_bushels:
+                c_pivot_m = _apply_unit(c_pivot_m, unit_factor)
+            c_pivot_c = build_cumulative_pivot(c_pivot_m, c_all_years, c_months)
+            c_stats_m = compute_stats(c_pivot_m, c_all_years, c_complete,
+                                      c_cy, c_ly, c_months, is_cumulative=False)
+            c_stats_c = compute_stats(c_pivot_c, c_all_years, c_complete,
+                                      c_cy, c_ly, c_months, is_cumulative=True)
+
+        with ctrl_yr:
+            default_yrs = [y for y in [c_cy,
+                           c_all_years[-2] if len(c_all_years) > 1 else None]
+                           if y is not None]
+            cmp_years = st.multiselect(
+                "Marketing years to compare",
+                options=c_all_years[::-1], default=default_yrs,
+                key=f"{pfx}_cmp_years",
+            )
+
+        st.caption(
+            f"Showing: **{FIELDS[cmp_field]}** &nbsp;|&nbsp; "
+            "Dashed line = 6-yr Olympic Avg (prior years) &nbsp;|&nbsp; "
+            "Faint band = historical Min–Max range (prior years)."
+        )
+
+        if cmp_years:
+            c_pivot = c_pivot_c if use_cum_cmp else c_pivot_m
+            c_stats = c_stats_c if use_cum_cmp else c_stats_m
+            st.plotly_chart(
+                make_column_chart(c_pivot, c_stats, cmp_years, c_cy,
+                                  FIELDS[cmp_field], use_cum_cmp, c_months,
+                                  logo_white_b64, unit_short=unit_short),
+                use_container_width=True,
+            )
+        else:
+            st.info("Select at least one marketing year above to display the chart.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MARKETING YEARS REFERENCE TAB
 # ─────────────────────────────────────────────────────────────────────────────
 def _render_my_reference_tab():
@@ -1356,6 +1865,21 @@ def _render_my_reference_tab():
         unsafe_allow_html=True,
     )
 
+    wheat_html = _ref_table("🌾 Wheat Marketing Year Structure", [
+        ("United States", "North", "Jun–May", "Jun–May"),
+        ("Canada",        "North", "Aug–Jul", "Aug–Jul"),
+        ("EU",            "North", "Jul–Jun", "Jul–Jun"),
+        ("Russia",        "North", "Jul–Jun", "Jul–Jun"),
+        ("Ukraine",       "North", "Jul–Jun", "Jul–Jun"),
+        ("India",         "North", "Apr–Mar", "Apr–Mar"),
+        ("China",         "North", "Jun–May", "Jun–May"),
+        ("Argentina",     "South", "Dec–Nov", "Dec–Nov"),
+        ("Australia",     "South", "Dec–Nov", "Dec–Nov"),
+        ("Brazil",        "South", "Oct–Sep", "Oct–Sep"),
+        ("Total Non-US",  "—",     "Jul–Jun",  "Jul–Jun"),
+        ("Major Exporters","—",    "Jul–Jun",  "Jul–Jun"),
+    ])
+
     corn_html = _ref_table("🌽 Corn Marketing Year Structure", [
         ("United States",         "North", "Oct–Sep", "Sep–Aug"),
         ("Brazil",                "South", "Oct–Sep", "Mar–Feb"),
@@ -1382,7 +1906,7 @@ def _render_my_reference_tab():
         ("Major Exporters", "—",     "Oct–Sep", "Oct–Sep"),
     ])
 
-    st.markdown(corn_html + soy_html + meal_html, unsafe_allow_html=True)
+    st.markdown(wheat_html + corn_html + soy_html + meal_html, unsafe_allow_html=True)
 
     # ── USDA PSD link ─────────────────────────────────────────────────────
     st.markdown(f"""
@@ -1477,8 +2001,8 @@ def main():
     unit_decimals = 1      if use_bushels else 0
 
     # ── Top-level commodity tabs ──────────────────────────────────────────
-    corn_tab, soy_tab, meal_tab, ref_tab = st.tabs(
-        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "📅  Marketing Years"]
+    corn_tab, soy_tab, meal_tab, wheat_tab, ref_tab = st.tabs(
+        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat", "📅  Marketing Years"]
     )
 
     with corn_tab:
@@ -1492,6 +2016,10 @@ def main():
     with meal_tab:
         _run_commodity_tab("soybeanmeal", use_bushels, unit_short,
                            unit_decimals, unit_long, logo_white_b64)
+
+    with wheat_tab:
+        _run_wheat_tab(use_bushels, unit_short, unit_decimals,
+                       unit_long, logo_white_b64)
 
     with ref_tab:
         _render_my_reference_tab()

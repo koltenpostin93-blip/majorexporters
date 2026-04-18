@@ -17,7 +17,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import base64
 import os
 import shutil
@@ -965,85 +964,76 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
 def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
                         unit_short, logo_b64=None) -> go.Figure:
     """
-    Two-subplot stacked horizontal bar chart.
-      Row 1 (top)   : % vs Olympic Average
-      Row 2 (bottom): % vs Last Year
+    Single grouped horizontal bar chart.
+    For each country:
+      • Top bar  — % vs Olympic Avg  (solid, full opacity)
+      • Bottom bar — % vs Last Year  (same colour family, 55% opacity)
     Countries sorted highest → lowest by % vs Avg.
-    Green bar = positive, Red bar = negative.
+    Green = above reference, Red = below.
     """
     valid = [d for d in snap_data
              if d.get("pct_avg") is not None or d.get("pct_ly") is not None]
     if not valid:
         return go.Figure()
 
-    # Sort ascending so the highest value ends up at the top of the chart
+    # Sort ascending → highest ends up at the top of the horizontal chart
     sorted_data = sorted(
         valid,
         key=lambda d: (d["pct_avg"] if d.get("pct_avg") is not None else -9999),
     )
 
-    labels   = [d["label"]         for d in sorted_data]
-    pct_avgs = [d.get("pct_avg")   for d in sorted_data]
-    pct_lys  = [d.get("pct_ly")    for d in sorted_data]
+    labels   = [d["label"]       for d in sorted_data]
+    pct_avgs = [d.get("pct_avg") for d in sorted_data]
+    pct_lys  = [d.get("pct_ly")  for d in sorted_data]
 
-    def _bar_colors(vals):
+    def _colors(vals):
         return ["#4caf50" if (v is not None and v >= 0) else "#ef5350" for v in vals]
 
-    def _bar_text(vals):
-        return [f"{v:+.1f}%" if v is not None else "" for v in vals]
-
     n     = len(labels)
-    row_h = max(28, min(55, 480 // max(n, 1)))
-    fig_h = n * row_h * 2 + 240
+    fig_h = max(400, n * 58 + 160)
 
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_yaxes=False,
-        vertical_spacing=0.10,
-        subplot_titles=["% vs Olympic Avg", "% vs Last Year"],
-    )
-
-    # ── Top: % vs Olympic Avg ─────────────────────────────────────────────
-    fig.add_trace(go.Bar(
-        x=pct_avgs, y=labels,
-        orientation="h",
-        marker_color=_bar_colors(pct_avgs),
-        marker_line_width=0,
-        text=_bar_text(pct_avgs),
-        textposition="outside",
-        cliponaxis=False,
-        showlegend=False,
-        name="% vs Avg",
-    ), row=1, col=1)
-
-    # ── Bottom: % vs Last Year ────────────────────────────────────────────
-    fig.add_trace(go.Bar(
-        x=pct_lys, y=labels,
-        orientation="h",
-        marker_color=_bar_colors(pct_lys),
-        marker_line_width=0,
-        text=_bar_text(pct_lys),
-        textposition="outside",
-        cliponaxis=False,
-        showlegend=False,
-        name="% vs LY",
-    ), row=2, col=1)
-
-    # Zero reference lines
-    fig.add_vline(x=0, line_color="#8a9aaa", line_width=1.2, row=1, col=1)
-    fig.add_vline(x=0, line_color="#8a9aaa", line_width=1.2, row=2, col=1)
-
-    # Symmetric x-axis with label padding
     all_vals = [v for v in pct_avgs + pct_lys if v is not None]
     if all_vals:
-        mx  = max(abs(v) for v in all_vals)
-        pad = mx * 0.28 + 6
+        mx      = max(abs(v) for v in all_vals)
+        pad     = mx * 0.30 + 8
         x_range = [-(mx + pad), mx + pad]
     else:
         x_range = [-30, 30]
 
+    fig = go.Figure()
+
+    # ── Trace 1: % vs Olympic Avg (solid — drawn first so it appears on TOP) ──
+    fig.add_trace(go.Bar(
+        x=pct_avgs, y=labels,
+        orientation="h",
+        name="% vs Olympic Avg",
+        marker_color=_colors(pct_avgs),
+        marker_line_width=0,
+        opacity=1.0,
+        text=[f"Avg {v:+.1f}%" if v is not None else "Avg —" for v in pct_avgs],
+        textposition="outside",
+        cliponaxis=False,
+    ))
+
+    # ── Trace 2: % vs Last Year (lighter — appears BELOW in grouped chart) ────
+    fig.add_trace(go.Bar(
+        x=pct_lys, y=labels,
+        orientation="h",
+        name="% vs Last Year",
+        marker_color=_colors(pct_lys),
+        marker_line_width=0,
+        opacity=0.55,
+        text=[f"LY  {v:+.1f}%" if v is not None else "LY  —" for v in pct_lys],
+        textposition="outside",
+        cliponaxis=False,
+    ))
+
+    # Single zero-reference line across the whole chart
+    fig.add_vline(x=0, line_color="#8a9aaa", line_width=1.2)
+
     fig.update_layout(
-        height=max(500, fig_h),
+        barmode="group",
+        height=fig_h,
         title=dict(
             text=(f"{commodity_label} — Cumulative Shipment Snapshot"
                   f"  ·  {selected_year_label}"),
@@ -1053,8 +1043,17 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         paper_bgcolor="#181c20",
         plot_bgcolor="#1d2227",
         font=dict(family="Arial", color="#d0d8e0", size=11),
-        margin=dict(l=10, r=90, t=90, b=30),
-        bargap=0.25,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.02,
+            xanchor="left", x=0,
+            font=dict(color="#aab4c0", size=11),
+            bgcolor="rgba(0,0,0,0)",
+            itemsizing="constant",
+        ),
+        margin=dict(l=10, r=120, t=80, b=20),
+        bargap=0.28,
+        bargroupgap=0.06,
     )
     fig.update_xaxes(
         ticksuffix="%",
@@ -1067,8 +1066,17 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         gridcolor="#2e353d", gridwidth=0.5,
         tickfont=dict(size=11),
     )
-    for ann in fig.layout.annotations:
-        ann.update(font=dict(color="#aab4c0", size=12, family="Arial"))
+
+    # Annotation note at bottom explaining opacity difference
+    fig.add_annotation(
+        text="■ Solid = % vs Olympic Avg     ■ Light = % vs Last Year"
+             "     🟢 Above reference     🔴 Below reference",
+        xref="paper", yref="paper",
+        x=0.0, y=-0.04,
+        xanchor="left", yanchor="top",
+        showarrow=False,
+        font=dict(size=10, color="#5a6878", family="Arial"),
+    )
 
     _add_chart_watermark(fig, logo_b64)
     return fig

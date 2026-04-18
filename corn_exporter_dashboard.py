@@ -17,6 +17,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import base64
 import os
 import shutil
@@ -961,6 +962,118 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
     return fig
 
 
+def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
+                        unit_short, logo_b64=None) -> go.Figure:
+    """
+    Two-subplot stacked horizontal bar chart.
+      Row 1 (top)   : % vs Olympic Average
+      Row 2 (bottom): % vs Last Year
+    Countries sorted highest → lowest by % vs Avg.
+    Green bar = positive, Red bar = negative.
+    """
+    valid = [d for d in snap_data
+             if d.get("pct_avg") is not None or d.get("pct_ly") is not None]
+    if not valid:
+        return go.Figure()
+
+    # Sort ascending so the highest value ends up at the top of the chart
+    sorted_data = sorted(
+        valid,
+        key=lambda d: (d["pct_avg"] if d.get("pct_avg") is not None else -9999),
+    )
+
+    labels   = [d["label"]         for d in sorted_data]
+    pct_avgs = [d.get("pct_avg")   for d in sorted_data]
+    pct_lys  = [d.get("pct_ly")    for d in sorted_data]
+
+    def _bar_colors(vals):
+        return ["#4caf50" if (v is not None and v >= 0) else "#ef5350" for v in vals]
+
+    def _bar_text(vals):
+        return [f"{v:+.1f}%" if v is not None else "" for v in vals]
+
+    n     = len(labels)
+    row_h = max(28, min(55, 480 // max(n, 1)))
+    fig_h = n * row_h * 2 + 240
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_yaxes=False,
+        vertical_spacing=0.10,
+        subplot_titles=["% vs Olympic Avg", "% vs Last Year"],
+    )
+
+    # ── Top: % vs Olympic Avg ─────────────────────────────────────────────
+    fig.add_trace(go.Bar(
+        x=pct_avgs, y=labels,
+        orientation="h",
+        marker_color=_bar_colors(pct_avgs),
+        marker_line_width=0,
+        text=_bar_text(pct_avgs),
+        textposition="outside",
+        cliponaxis=False,
+        showlegend=False,
+        name="% vs Avg",
+    ), row=1, col=1)
+
+    # ── Bottom: % vs Last Year ────────────────────────────────────────────
+    fig.add_trace(go.Bar(
+        x=pct_lys, y=labels,
+        orientation="h",
+        marker_color=_bar_colors(pct_lys),
+        marker_line_width=0,
+        text=_bar_text(pct_lys),
+        textposition="outside",
+        cliponaxis=False,
+        showlegend=False,
+        name="% vs LY",
+    ), row=2, col=1)
+
+    # Zero reference lines
+    fig.add_vline(x=0, line_color="#8a9aaa", line_width=1.2, row=1, col=1)
+    fig.add_vline(x=0, line_color="#8a9aaa", line_width=1.2, row=2, col=1)
+
+    # Symmetric x-axis with label padding
+    all_vals = [v for v in pct_avgs + pct_lys if v is not None]
+    if all_vals:
+        mx  = max(abs(v) for v in all_vals)
+        pad = mx * 0.28 + 6
+        x_range = [-(mx + pad), mx + pad]
+    else:
+        x_range = [-30, 30]
+
+    fig.update_layout(
+        height=max(500, fig_h),
+        title=dict(
+            text=(f"{commodity_label} — Cumulative Shipment Snapshot"
+                  f"  ·  {selected_year_label}"),
+            font=dict(size=14, color="#ffffff", family="Arial"),
+            x=0.01,
+        ),
+        paper_bgcolor="#181c20",
+        plot_bgcolor="#1d2227",
+        font=dict(family="Arial", color="#d0d8e0", size=11),
+        margin=dict(l=10, r=90, t=90, b=30),
+        bargap=0.25,
+    )
+    fig.update_xaxes(
+        ticksuffix="%",
+        gridcolor="#2e353d", gridwidth=0.5,
+        zeroline=False,
+        tickfont=dict(size=10),
+        range=x_range,
+    )
+    fig.update_yaxes(
+        gridcolor="#2e353d", gridwidth=0.5,
+        tickfont=dict(size=11),
+    )
+    for ann in fig.layout.annotations:
+        ann.update(font=dict(color="#aab4c0", size=12, family="Arial"))
+
+    _add_chart_watermark(fig, logo_b64)
+    return fig
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STAT TILES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1142,6 +1255,159 @@ def _render_tile_grid(tiles, unit_short, unit_decimals) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SNAPSHOT DATA HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
+                            selected_year=None) -> list:
+    """
+    Compute per-country snapshot stats always using USDA Oct–Sep MY.
+    selected_year=None  → CY MYTD (latest reported month per country).
+    selected_year=str   → full MY total for that prior year.
+    Returns list of {field, label, pct_avg, pct_ly, cum_val, year}.
+    """
+    result = []
+    for field in cfg["tile_order"]:
+        try:
+            pivot, all_years = build_pivot(df, field)
+        except Exception:
+            continue
+        if not all_years:
+            continue
+        if use_bushels:
+            pivot = _apply_unit(pivot, unit_factor)
+        cum_piv  = build_cumulative_pivot(pivot, all_years, OCT_SEP_MONTHS)
+        cy       = all_years[-1]
+        ly       = all_years[-2] if len(all_years) >= 2 else None
+        complete = [y for y in get_complete_years(pivot, "Sep") if y != cy]
+
+        if selected_year is None:
+            # Current year: find latest reported cumulative month
+            year     = cy
+            ref_ly   = ly
+            latest_m = None
+            for m in reversed(OCT_SEP_MONTHS):
+                if cum_piv[m].get(cy) is not None:
+                    latest_m = m
+                    break
+            if latest_m is None:
+                continue
+            cum_val = cum_piv[latest_m].get(cy)
+            ly_val  = cum_piv[latest_m].get(ly) if ly else None
+            oly_yrs = sorted(complete)[-6:]
+            oly_val = olympic_avg([cum_piv[latest_m].get(y) for y in oly_yrs])
+        else:
+            year = selected_year
+            if year not in all_years:
+                continue
+            yr_idx = all_years.index(year)
+            ref_ly = all_years[yr_idx - 1] if yr_idx > 0 else None
+            # Full MY total: use cumulative at Sep; fallback to latest available
+            cum_val = cum_piv["Sep"].get(year)
+            if cum_val is None:
+                for m in reversed(OCT_SEP_MONTHS):
+                    v = cum_piv[m].get(year)
+                    if v is not None:
+                        cum_val = v
+                        break
+            if cum_val is None:
+                continue
+            ly_val  = cum_piv["Sep"].get(ref_ly) if ref_ly else None
+            prior   = [y for y in complete if y != year]
+            oly_yrs = sorted(prior)[-6:]
+            oly_val = olympic_avg([cum_piv["Sep"].get(y) for y in oly_yrs])
+
+        result.append(dict(
+            field   = field,
+            label   = cfg["fields"][field],
+            year    = year,
+            cum_val = cum_val,
+            pct_avg = _pct(cum_val, oly_val),
+            pct_ly  = _pct(cum_val, ly_val),
+        ))
+    return result
+
+
+def _compute_wheat_snapshot_data(df, cfg, use_bushels, unit_factor,
+                                  nh_compare, sh_compare,
+                                  selected_year=None) -> list:
+    """
+    Per-country wheat snapshot using each country's own MY convention.
+    selected_year=None  → newest available data per country (MYTD).
+    selected_year=str   → full MY total for that prior year.
+    """
+    result = []
+    for field in cfg["tile_order"]:
+        if field not in df.columns:
+            continue
+        months, prev_months, last_month, _ = _get_wheat_field_my(
+            field, cfg, nh_compare, sh_compare
+        )
+        try:
+            pivot, all_years = build_arbr_pivot(
+                df, field,
+                months_list=months, prev_months=prev_months, year_offset=0,
+            )
+        except Exception:
+            continue
+        if not all_years:
+            continue
+        if use_bushels:
+            pivot = _apply_unit(pivot, unit_factor)
+        cum_piv  = build_cumulative_pivot(pivot, all_years, months)
+        complete = get_complete_years(pivot, last_month)
+
+        if selected_year is None:
+            # Newest year with any data (countries report at different times)
+            year     = None
+            latest_m = None
+            for yr in reversed(all_years):
+                for m in reversed(months):
+                    if cum_piv[m].get(yr) is not None:
+                        year, latest_m = yr, m
+                        break
+                if year:
+                    break
+            if year is None:
+                continue
+            yr_idx = all_years.index(year)
+            ref_ly = all_years[yr_idx - 1] if yr_idx > 0 else None
+            complete_for = [y for y in complete if y != year]
+            cum_val = cum_piv[latest_m].get(year)
+            ly_val  = cum_piv[latest_m].get(ref_ly) if ref_ly else None
+            oly_yrs = sorted(complete_for)[-6:]
+            oly_val = olympic_avg([cum_piv[latest_m].get(y) for y in oly_yrs])
+        else:
+            year = selected_year
+            if year not in all_years:
+                continue
+            yr_idx = all_years.index(year)
+            ref_ly = all_years[yr_idx - 1] if yr_idx > 0 else None
+            cum_val = cum_piv[last_month].get(year)
+            if cum_val is None:
+                for m in reversed(months):
+                    v = cum_piv[m].get(year)
+                    if v is not None:
+                        cum_val = v
+                        break
+            if cum_val is None:
+                continue
+            ly_val = cum_piv[last_month].get(ref_ly) if ref_ly else None
+            complete_for = [y for y in complete if y != year]
+            oly_yrs = sorted(complete_for)[-6:]
+            oly_val = olympic_avg([cum_piv[last_month].get(y) for y in oly_yrs])
+
+        result.append(dict(
+            field   = field,
+            label   = cfg["fields"][field],
+            year    = year,
+            cum_val = cum_val,
+            pct_avg = _pct(cum_val, oly_val),
+            pct_ly  = _pct(cum_val, ly_val),
+        ))
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # COMMODITY TAB RENDERER
 # ─────────────────────────────────────────────────────────────────────────────
 def _run_commodity_tab(commodity: str, use_bushels: bool,
@@ -1210,6 +1476,50 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
         unsafe_allow_html=True,
     )
+
+    # ── Snapshot Chart ────────────────────────────────────────────────────
+    st.markdown("### 📸 Export Snapshot — All Countries")
+
+    # Build year list from USDA MY on first available tile field
+    _snap_ref_field = cfg["tile_order"][0]
+    try:
+        _, _snap_all_years = build_pivot(df, _snap_ref_field)
+    except Exception:
+        _snap_all_years = []
+
+    _snap_cy     = _snap_all_years[-1] if _snap_all_years else None
+    _snap_prior  = list(reversed(_snap_all_years[:-1])) if len(_snap_all_years) > 1 else []
+    _snap_opts   = [f"Current Year YTD ({_snap_cy})"] + _snap_prior if _snap_cy else []
+
+    if _snap_opts:
+        _snap_sel = st.selectbox(
+            "Marketing Year",
+            options=_snap_opts,
+            index=0,
+            key=f"{pfx}_snap_year",
+            help=(
+                "**Current Year YTD** — cumulative shipments through the most recent "
+                "reported month for each country.\n\n"
+                "**Prior years** — full marketing year total (USDA Oct–Sep)."
+            ),
+        )
+        _is_cy_snap = _snap_sel.startswith("Current Year")
+        _sel_yr     = None if _is_cy_snap else _snap_sel
+        _snap_label = (f"CY {_snap_cy} (YTD, USDA Oct–Sep)"
+                       if _is_cy_snap else f"Full MY {_snap_sel} (USDA Oct–Sep)")
+
+        _snap_data = _compute_snapshot_data(df, cfg, use_bushels, unit_factor,
+                                            selected_year=_sel_yr)
+        if _snap_data:
+            st.plotly_chart(
+                make_snapshot_chart(_snap_data, cfg["label"], _snap_label,
+                                    unit_short, logo_white_b64),
+                use_container_width=True,
+            )
+        else:
+            st.info("No snapshot data available for the selected year.")
+
+    st.markdown("---")
 
     # ── Country / Category filter ─────────────────────────────────────────
     st.markdown("#### Select Country or Category")
@@ -1649,6 +1959,57 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
         unsafe_allow_html=True,
     )
+
+    # ── Wheat Snapshot Chart ──────────────────────────────────────────────
+    st.markdown("### 📸 Export Snapshot — All Countries")
+
+    # Build year list from the first available wheat field
+    _wsnap_ref = next((f for f in cfg["tile_order"] if f in df.columns), None)
+    _wsnap_all_years = []
+    if _wsnap_ref:
+        try:
+            _wm, _wp, _, _ = _get_wheat_field_my(_wsnap_ref, cfg, nh_compare, sh_compare)
+            _, _wsnap_all_years = build_arbr_pivot(
+                df, _wsnap_ref, months_list=_wm, prev_months=_wp, year_offset=0
+            )
+        except Exception:
+            _wsnap_all_years = []
+
+    _wsnap_cy    = _wsnap_all_years[-1] if _wsnap_all_years else None
+    _wsnap_prior = list(reversed(_wsnap_all_years[:-1])) if len(_wsnap_all_years) > 1 else []
+    _wsnap_opts  = [f"Current Year YTD ({_wsnap_cy})"] + _wsnap_prior if _wsnap_cy else []
+
+    if _wsnap_opts:
+        _wsnap_sel = st.selectbox(
+            "Marketing Year",
+            options=_wsnap_opts,
+            index=0,
+            key="wheat_snap_year",
+            help=(
+                "**Current Year YTD** — cumulative shipments through the most recent "
+                "reported month (each country uses its own marketing year).\n\n"
+                "**Prior years** — full marketing year total per country."
+            ),
+        )
+        _wis_cy     = _wsnap_sel.startswith("Current Year")
+        _wsel_yr    = None if _wis_cy else _wsnap_sel
+        _wsnap_lbl  = (f"CY {_wsnap_cy} (YTD, per-country MY)"
+                       if _wis_cy else f"Full MY {_wsnap_sel} (per-country MY)")
+
+        _wsnap_data = _compute_wheat_snapshot_data(
+            df, cfg, use_bushels, unit_factor,
+            nh_compare, sh_compare, selected_year=_wsel_yr,
+        )
+        if _wsnap_data:
+            st.plotly_chart(
+                make_snapshot_chart(_wsnap_data, "Wheat", _wsnap_lbl,
+                                    unit_short, logo_white_b64),
+                use_container_width=True,
+            )
+        else:
+            st.info("No snapshot data available for the selected year.")
+
+    st.markdown("---")
 
     # ── Country / Category filter ────────────────────────────────────────
     st.markdown("#### Select Country or Category")

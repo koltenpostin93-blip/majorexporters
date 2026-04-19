@@ -371,7 +371,8 @@ st.set_page_config(
 # LOGO UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def _load_logo_b64(path: str) -> str | None:
+def _load_logo_b64(path: str, _mtime: float = 0) -> str | None:
+    """Load a logo file as a base64 data URI. _mtime is used as a cache-bust key."""
     try:
         with open(path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode()
@@ -2447,8 +2448,10 @@ def _render_my_reference_tab():
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
 
-    logo_white_b64 = _load_logo_b64(LOGO_WHITE_PATH)
-    logo_full_b64  = _load_logo_b64(LOGO_FULL_PATH)
+    _white_mtime = os.path.getmtime(LOGO_WHITE_PATH) if os.path.exists(LOGO_WHITE_PATH) else 0
+    _full_mtime  = os.path.getmtime(LOGO_FULL_PATH)  if os.path.exists(LOGO_FULL_PATH)  else 0
+    logo_white_b64 = _load_logo_b64(LOGO_WHITE_PATH, _mtime=_white_mtime)
+    logo_full_b64  = _load_logo_b64(LOGO_FULL_PATH,  _mtime=_full_mtime)
 
     # ── Header ───────────────────────────────────────────────────────────
     logo_img_tag = (

@@ -873,13 +873,18 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
     oly_6 = sorted(complete_years)[-6:]
     if len(oly_6) >= 3:
         oly_vals = [olympic_avg([data_pivot[m].get(y) for y in oly_6]) for m in months]
+        oly_hover = [
+            f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+            for v in oly_vals
+        ]
         fig.add_trace(go.Scatter(
             x=months, y=oly_vals, mode="lines+markers",
             name="6-Yr Olympic Avg",
             line=dict(color="#0693e3", width=2.5, dash="dash"),
             marker=dict(symbol="diamond", size=6, color="#0693e3"),
             legendrank=800,
-            hovertemplate=f"%{{y:{vol_fmt}}} {unit_short}<extra>6-Yr Olympic Avg</extra>",
+            customdata=oly_hover,
+            hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
         ))
 
     # Build year draw order (oldest first for rendering so newer lines sit on top)
@@ -900,13 +905,18 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
         vals  = [data_pivot[m].get(year) for m in months]
         color, width, opacity = _year_style(year, cy, ly, all_years)
         is_key = year in (cy, ly)
+        yr_hover = [
+            f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+            for v in vals
+        ]
         fig.add_trace(go.Scatter(
             x=months, y=vals, mode="lines+markers", name=year,
             line=dict(color=color, width=width),
             marker=dict(size=5 if is_key else 3, color=color),
             opacity=opacity, connectgaps=False,
             legendrank=legend_rank.get(year, 500),
-            hovertemplate=f"%{{y:{vol_fmt}}} {unit_short}<extra>%{{fullData.name}}</extra>",
+            customdata=yr_hover,
+            hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
         ))
 
     fig.update_layout(**_base_layout(
@@ -941,11 +951,16 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
         name="Hist. Min–Max Range", hoverinfo="skip",
     ))
     olys = [stats[m]["oly_avg"] for m in months]
+    oly_hover = [
+        f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+        for v in olys
+    ]
     fig.add_trace(go.Scatter(
         x=months, y=olys, mode="lines+markers", name="6-Yr Olympic Avg",
         line=dict(color="#0693e3", width=2.5, dash="dot"),
         marker=dict(symbol="diamond", size=7, color="#0693e3"),
-        hovertemplate=f"%{{x}}: %{{y:{vol_fmt}}} {unit_short}<extra>6-Yr Olympic Avg</extra>",
+        customdata=oly_hover,
+        hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
     ))
 
     color_idx = 0
@@ -954,10 +969,15 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
         color = "#f9a825" if year == cy else _BAR_COLORS[color_idx % len(_BAR_COLORS)]
         if year != cy:
             color_idx += 1
+        bar_hover = [
+            f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+            for v in vals
+        ]
         fig.add_trace(go.Bar(
             x=months, y=vals, name=year,
             marker_color=color, opacity=0.85,
-            hovertemplate=f"%{{x}}: %{{y:{vol_fmt}}} {unit_short}<extra>%{{fullData.name}}</extra>",
+            customdata=bar_hover,
+            hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
         ))
 
     fig.update_layout(
@@ -1012,6 +1032,10 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
 
     fig = go.Figure()
 
+    # Pre-format hover strings in Python (avoids d3 format flag issues)
+    hover_avg = [f"{v:+.1f}%" if v is not None else "N/A" for v in pct_avgs]
+    hover_ly  = [f"{v:+.1f}%" if v is not None else "N/A" for v in pct_lys]
+
     # ── Trace 1: % vs Olympic Avg (solid — drawn first so it appears on TOP) ──
     fig.add_trace(go.Bar(
         x=pct_avgs, y=labels,
@@ -1023,7 +1047,8 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         text=[f"Avg {v:+.1f}%" if v is not None else "Avg —" for v in pct_avgs],
         textposition="outside",
         cliponaxis=False,
-        hovertemplate="%{y}: %{x:+.1f}%<extra>% vs Olympic Avg</extra>",
+        customdata=hover_avg,
+        hovertemplate="%{y}: %{customdata}<extra>% vs Olympic Avg</extra>",
     ))
 
     # ── Trace 2: % vs Last Year (lighter — appears BELOW in grouped chart) ────
@@ -1037,7 +1062,8 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         text=[f"LY  {v:+.1f}%" if v is not None else "LY  —" for v in pct_lys],
         textposition="outside",
         cliponaxis=False,
-        hovertemplate="%{y}: %{x:+.1f}%<extra>% vs Last Year</extra>",
+        customdata=hover_ly,
+        hovertemplate="%{y}: %{customdata}<extra>% vs Last Year</extra>",
     ))
 
     # Single zero-reference line across the whole chart

@@ -2453,37 +2453,45 @@ def main():
     # ── Header ───────────────────────────────────────────────────────────
     logo_img_tag = (
         f'<img src="{logo_full_b64}" '
-        f'style="height:52px;width:auto;display:block;" alt="JSA Logo">'
+        f'style="height:48px;width:auto;display:block;" alt="JSA Logo">'
         if logo_full_b64 else
         '<span style="font-size:22px;font-weight:700;color:#fff;'
         'font-family:Georgia,serif;">JSA</span>'
     )
     st.markdown(f"""
-    <div style="background:#1e2124;padding:16px 28px;border-radius:10px;
-                margin-bottom:18px;border-bottom:3px solid {JSA_GREEN};
-                display:flex;align-items:center;gap:24px;">
-        <div style="flex-shrink:0;">{logo_img_tag}</div>
-        <div style="border-left:1px solid #484f56;padding-left:22px;flex:1;">
-            <h1 style="color:#fff;margin:0;font-size:24px;font-family:Arial;
-                       letter-spacing:0.3px;">
+    <div style="background:#2c3e35;padding:14px 28px;margin-bottom:0;
+                display:flex;align-items:center;gap:0;
+                margin-left:-1rem;margin-right:-1rem;
+                padding-left:2rem;padding-right:2rem;">
+        <div style="flex-shrink:0;padding-right:24px;">
+            {logo_img_tag}
+        </div>
+        <div style="border-left:1px solid rgba(255,255,255,0.25);
+                    padding-left:24px;flex:1;">
+            <div style="color:#ffffff;font-size:20px;font-weight:700;
+                        font-family:Arial;letter-spacing:0.3px;line-height:1.2;">
                 Global Agricultural Export Dashboard
-            </h1>
-            <p style="color:#aab4c0;margin:5px 0 0 0;font-size:12.5px;font-family:Arial;">
-                Monthly shipments in thousands of metric tons (TMT)
-                &nbsp;&nbsp;•&nbsp;&nbsp;
-                Default: Local MY per country (US: Sep–Aug · Corn AR/BR: Mar–Feb · Soy &amp; Meal AR/BR: Apr–Mar)
-                &nbsp;&nbsp;•&nbsp;&nbsp;
-                Toggle off Local MY to align with USDA Oct–Sep for cross-country comparisons
-            </p>
+            </div>
+            <div style="color:rgba(255,255,255,0.55);font-size:10.5px;
+                        font-family:Arial;letter-spacing:1px;
+                        text-transform:uppercase;margin-top:3px;">
+                John Stewart and Associates &nbsp;·&nbsp; Commodity Research Analytics
+            </div>
         </div>
         <div style="flex-shrink:0;text-align:right;">
-            <span style="display:inline-block;background:{JSA_GREEN};color:#fff;
-                         font-family:Arial;font-size:11px;font-weight:600;
-                         padding:4px 12px;border-radius:9999px;letter-spacing:0.5px;">
-                RESEARCH ANALYTICS
-            </span>
+            <div style="color:rgba(255,255,255,0.9);font-size:11.5px;
+                        font-weight:700;font-family:Arial;letter-spacing:0.3px;">
+                Data Source
+            </div>
+            <div style="color:rgba(255,255,255,0.5);font-size:10.5px;
+                        font-family:Arial;margin-top:2px;">
+                USDA Foreign Agricultural Service
+            </div>
         </div>
     </div>
+    <div style="background:#243830;height:3px;
+                margin-left:-1rem;margin-right:-1rem;
+                margin-bottom:18px;"></div>
     """, unsafe_allow_html=True)
 
     # ── Refresh + Unit toggle ─────────────────────────────────────────────

@@ -843,6 +843,8 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                         field_label, is_cumulative, months,
                         logo_b64=None, unit_short="TMT") -> go.Figure:
     lbl = "Cumulative " if is_cumulative else ""
+    dec = 1 if unit_short == "Mbu" else 0          # decimal places for volumes
+    vol_fmt = f",.{dec}f"                           # Plotly format string
     fig = go.Figure()
     ly  = complete_years[-1] if complete_years else None
 
@@ -877,6 +879,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             line=dict(color="#0693e3", width=2.5, dash="dash"),
             marker=dict(symbol="diamond", size=6, color="#0693e3"),
             legendrank=800,
+            hovertemplate=f"%{{y:{vol_fmt}}} {unit_short}<extra>6-Yr Olympic Avg</extra>",
         ))
 
     # Build year draw order (oldest first for rendering so newer lines sit on top)
@@ -903,6 +906,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             marker=dict(size=5 if is_key else 3, color=color),
             opacity=opacity, connectgaps=False,
             legendrank=legend_rank.get(year, 500),
+            hovertemplate=f"%{{y:{vol_fmt}}} {unit_short}<extra>%{{fullData.name}}</extra>",
         ))
 
     fig.update_layout(**_base_layout(
@@ -924,6 +928,8 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
                       field_label, is_cumulative, months,
                       logo_b64=None, unit_short="TMT") -> go.Figure:
     lbl = "Cumulative " if is_cumulative else ""
+    dec = 1 if unit_short == "Mbu" else 0
+    vol_fmt = f",.{dec}f"
     fig = go.Figure()
 
     mins = [stats[m]["min"] for m in months]
@@ -939,6 +945,7 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
         x=months, y=olys, mode="lines+markers", name="6-Yr Olympic Avg",
         line=dict(color="#0693e3", width=2.5, dash="dot"),
         marker=dict(symbol="diamond", size=7, color="#0693e3"),
+        hovertemplate=f"%{{x}}: %{{y:{vol_fmt}}} {unit_short}<extra>6-Yr Olympic Avg</extra>",
     ))
 
     color_idx = 0
@@ -947,8 +954,11 @@ def make_column_chart(data_pivot, stats, selected_years, cy,
         color = "#f9a825" if year == cy else _BAR_COLORS[color_idx % len(_BAR_COLORS)]
         if year != cy:
             color_idx += 1
-        fig.add_trace(go.Bar(x=months, y=vals, name=year,
-                             marker_color=color, opacity=0.85))
+        fig.add_trace(go.Bar(
+            x=months, y=vals, name=year,
+            marker_color=color, opacity=0.85,
+            hovertemplate=f"%{{x}}: %{{y:{vol_fmt}}} {unit_short}<extra>%{{fullData.name}}</extra>",
+        ))
 
     fig.update_layout(
         barmode="group",
@@ -1013,6 +1023,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         text=[f"Avg {v:+.1f}%" if v is not None else "Avg —" for v in pct_avgs],
         textposition="outside",
         cliponaxis=False,
+        hovertemplate="%{y}: %{x:+.1f}%<extra>% vs Olympic Avg</extra>",
     ))
 
     # ── Trace 2: % vs Last Year (lighter — appears BELOW in grouped chart) ────
@@ -1026,6 +1037,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
         text=[f"LY  {v:+.1f}%" if v is not None else "LY  —" for v in pct_lys],
         textposition="outside",
         cliponaxis=False,
+        hovertemplate="%{y}: %{x:+.1f}%<extra>% vs Last Year</extra>",
     ))
 
     # Single zero-reference line across the whole chart

@@ -370,9 +370,8 @@ st.set_page_config(
 # ─────────────────────────────────────────────────────────────────────────────
 # LOGO UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
 def _load_logo_b64(path: str, _mtime: float = 0) -> str | None:
-    """Load a logo file as a base64 data URI. _mtime is used as a cache-bust key."""
+    """Load a logo file as a base64 data URI. Not cached so file changes are always picked up."""
     try:
         with open(path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode()

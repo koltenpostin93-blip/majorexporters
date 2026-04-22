@@ -2464,8 +2464,8 @@ def _run_china_imports_tab(logo_b64=None):
 
     fig1 = go.Figure()
     sorted_years = sorted(sel_years)
-    ly = sorted([y for y in all_years if y < cur_year and y in sel_years],
-                default=[None])[-1]
+    _ly_list = sorted([y for y in all_years if y < cur_year and y in sel_years])
+    ly = _ly_list[-1] if _ly_list else None
 
     # Olympic avg (6-yr excluding high/low from all complete years)
     complete_years = [y for y in all_years if y < cur_year][-8:]

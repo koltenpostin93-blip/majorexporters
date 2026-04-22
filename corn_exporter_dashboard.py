@@ -2392,8 +2392,30 @@ def _fetch_tdm_china(product_code: str, password: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _cn_my_info(commodity: str) -> tuple[list[int], list[str]]:
+    """Return (month_order, month_labels) for China MY based on commodity."""
+    if commodity == "Wheat (ex. seed)":
+        # Jul–Jun
+        months = [7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+        labels = ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"]
+    else:
+        # Oct–Sep  (Corn, Soybeans, Soybean Meal)
+        months = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        labels = ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
+    return months, labels
+
+
+def _cn_my_label(year: int, month: int, commodity: str) -> tuple[int, str]:
+    """Return (my_start_year, 'YYYY/YY') for a TDM data point."""
+    if commodity == "Wheat (ex. seed)":
+        my_start = year if month >= 7 else year - 1
+    else:
+        my_start = year if month >= 10 else year - 1
+    return my_start, f"{my_start}/{str(my_start + 1)[-2:]}"
+
+
 def _run_china_imports_tab(logo_b64=None):
-    """China Imports tab — powered by live TDM API data."""
+    """China Imports tab — styled to match other commodity tabs, MY-aware."""
 
     # ── Credentials ──────────────────────────────────────────────────────────
     try:
@@ -2405,13 +2427,15 @@ def _run_china_imports_tab(logo_b64=None):
         )
         return
 
-    # ── Controls row ─────────────────────────────────────────────────────────
-    ctrl1, ctrl2, ctrl3 = st.columns([2, 3, 2])
+    # ── Commodity + partner selectors (top row) ───────────────────────────────
+    ctrl1, ctrl2 = st.columns([2, 5])
     with ctrl1:
         commodity = st.selectbox(
             "Commodity", list(TDM_PRODUCTS.keys()), key="cn_commodity"
         )
     product_code = TDM_PRODUCTS[commodity]
+    is_wheat     = (commodity == "Wheat (ex. seed)")
+    my_months, my_labels = _cn_my_info(commodity)
 
     with st.spinner(f"Loading {commodity} data from TDM…"):
         df = _fetch_tdm_china(product_code, pwd)
@@ -2420,159 +2444,268 @@ def _run_china_imports_tab(logo_b64=None):
         st.warning("No data returned from TDM API. Check credentials or try again.")
         return
 
+    # ── Attach MY columns ─────────────────────────────────────────────────────
+    df = df.copy()
+    df["MY_START"] = df.apply(
+        lambda r: _cn_my_label(int(r["YEAR"]), int(r["MONTH"]), commodity)[0], axis=1
+    )
+    df["MY_LABEL"] = df.apply(
+        lambda r: _cn_my_label(int(r["YEAR"]), int(r["MONTH"]), commodity)[1], axis=1
+    )
+    df["MY_POS"] = df["MONTH"].apply(
+        lambda m: my_months.index(int(m)) + 1 if int(m) in my_months else None
+    )
+
     all_partners = sorted(df["PARTNER"].dropna().unique().tolist())
-    all_years    = sorted(df["YEAR"].dropna().unique().astype(int).tolist())
-    cur_year     = max(all_years)
-    months_abbr  = ["Jan","Feb","Mar","Apr","May","Jun",
-                    "Jul","Aug","Sep","Oct","Nov","Dec"]
+    all_my_starts = sorted(df["MY_START"].dropna().unique().astype(int).tolist())
+    cur_my_start  = max(all_my_starts)
+    cur_my_label  = f"{cur_my_start}/{str(cur_my_start+1)[-2:]}"
 
     with ctrl2:
         default_partners = [p for p in TDM_KEY_PARTNERS if p in all_partners]
         sel_partners = st.multiselect(
-            "Countries (partners)", all_partners,
+            "Source Countries", all_partners,
             default=default_partners, key="cn_partners"
-        )
-    with ctrl3:
-        default_yrs = [y for y in all_years if y >= cur_year - 5]
-        sel_years = st.multiselect(
-            "Years", all_years, default=default_yrs, key="cn_years"
         )
 
     if not sel_partners:
-        st.info("Select at least one partner country above.")
-        return
-    if not sel_years:
-        st.info("Select at least one year above.")
+        st.info("Select at least one source country above.")
         return
 
-    # ── Filter data ──────────────────────────────────────────────────────────
-    dff = df[df["PARTNER"].isin(sel_partners) & df["YEAR"].isin(sel_years)].copy()
+    # ── MY selector (matches snapshot selector pattern) ───────────────────────
+    my_opts_raw   = list(reversed(all_my_starts))
+    my_opt_labels = [
+        f"Current MY YTD ({cur_my_label})" if s == cur_my_start
+        else f"{s}/{str(s+1)[-2:]}"
+        for s in my_opts_raw
+    ]
+    sel_col, yr_col = st.columns([4, 3])
+    with sel_col:
+        snap_sel = st.selectbox(
+            "Marketing Year", my_opt_labels, index=0, key="cn_my_sel",
+            help=(
+                f"**Corn / Soybeans / Meal:** Oct–Sep marketing year\n\n"
+                f"**Wheat:** Jul–Jun marketing year\n\n"
+                "Current MY YTD = cumulative through latest available month."
+            ),
+        )
+    sel_my_start = my_opts_raw[my_opt_labels.index(snap_sel)]
+    sel_my_label = f"{sel_my_start}/{str(sel_my_start+1)[-2:]}"
+    is_current_my = (sel_my_start == cur_my_start)
 
-    # Monthly totals (all selected partners combined) per year
-    monthly = (
-        dff.groupby(["YEAR", "MONTH"])["TMT"].sum()
-        .reset_index()
-        .sort_values(["YEAR", "MONTH"])
-    )
+    with yr_col:
+        hist_default = [
+            f"{s}/{str(s+1)[-2:]}" for s in all_my_starts
+            if s >= cur_my_start - 5 and s != sel_my_start
+        ]
+        all_my_labels_sorted = [f"{s}/{str(s+1)[-2:]}" for s in reversed(all_my_starts)]
+        comp_years = st.multiselect(
+            "Compare MYs (seasonal chart)", all_my_labels_sorted,
+            default=hist_default, key="cn_comp_yrs"
+        )
 
-    # ── Chart 1: Seasonal monthly imports ────────────────────────────────────
+    # Convert selected MY labels → MY start years for charting
+    def _label_to_start(lbl: str) -> int:
+        return int(lbl.split("/")[0])
+
+    chart_my_starts = sorted(set(
+        [sel_my_start] + [_label_to_start(l) for l in comp_years]
+    ))
+
+    # ── Divider ───────────────────────────────────────────────────────────────
     st.markdown(
-        f'<div style="font-family:Arial;font-size:13px;font-weight:700;'
-        f'color:#e0e8f0;margin:12px 0 4px;">China {commodity} Imports — Monthly (TMT)</div>',
+        '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>',
         unsafe_allow_html=True,
     )
 
+    # ── MYTD Stat Tiles ───────────────────────────────────────────────────────
+    # Per-partner MYTD totals for current MY vs Olympic avg and vs LY
+    st.markdown("### 📊 Import Summary — Current MY YTD by Source Country")
+
+    # Build full-MY dataset for all partners + all MY starts
+    df_all = df[df["PARTNER"].isin(sel_partners)].copy()
+
+    # Determine last reported MY month position (in current MY)
+    cur_my_data = df_all[df_all["MY_START"] == cur_my_start]
+    last_pos    = int(cur_my_data["MY_POS"].max()) if not cur_my_data.empty else len(my_months)
+
+    # Get Olympic avg (6 complete MYs, trim high/low)
+    complete_my_starts = sorted([s for s in all_my_starts if s < cur_my_start])[-8:]
+
+    def _mytd(my_start: int, partner: str, through_pos: int) -> float | None:
+        sub = df_all[
+            (df_all["MY_START"] == my_start) &
+            (df_all["PARTNER"] == partner) &
+            (df_all["MY_POS"] <= through_pos)
+        ]
+        return float(sub["TMT"].sum()) if not sub.empty else None
+
+    tiles_html = ""
+    for partner in sel_partners:
+        cy_val   = _mytd(cur_my_start, partner, last_pos)
+        ly_start = cur_my_start - 1
+        ly_val   = _mytd(ly_start,      partner, last_pos)
+
+        oly_vals = [v for s in complete_my_starts
+                    if (v := _mytd(s, partner, last_pos)) is not None]
+        if len(oly_vals) >= 4:
+            oly_trimmed = sorted(oly_vals)[1:-1]
+            oly_val = float(np.mean(oly_trimmed))
+        else:
+            oly_val = float(np.mean(oly_vals)) if oly_vals else None
+
+        pct_avg = ((cy_val / oly_val - 1) * 100) if cy_val and oly_val else None
+        pct_ly  = ((cy_val / ly_val  - 1) * 100) if cy_val and ly_val  else None
+
+        def _pct_color(v):
+            return "#4caf50" if v is not None and v >= 0 else "#ef5350"
+
+        def _fmt(v, dec=0):
+            return f"{v:,.{dec}f}" if v is not None else "—"
+
+        color = _PARTNER_COLORS.get(partner, "#8a9aaa")
+        tiles_html += f"""
+        <div style="background:#1e2124;border:1px solid #2e353d;border-top:3px solid {color};
+                    border-radius:6px;padding:12px 16px;min-width:160px;flex:1;">
+          <div style="font-family:Arial;font-size:11px;font-weight:700;color:#8a9aaa;
+                      text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">
+            {partner}
+          </div>
+          <div style="font-family:Arial;font-size:18px;font-weight:700;color:#fff;
+                      margin-bottom:4px;">{_fmt(cy_val)} <span style="font-size:11px;color:#8a9aaa;">TMT</span></div>
+          <div style="display:flex;gap:10px;margin-top:4px;">
+            <span style="font-family:Arial;font-size:11px;color:{_pct_color(pct_avg)};">
+              Avg: {('+' if pct_avg and pct_avg>=0 else '')}{_fmt(pct_avg,1)}%
+            </span>
+            <span style="font-family:Arial;font-size:11px;color:{_pct_color(pct_ly)};">
+              LY: {('+' if pct_ly and pct_ly>=0 else '')}{_fmt(pct_ly,1)}%
+            </span>
+          </div>
+        </div>"""
+
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">'
+        f'{tiles_html}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="border-top:1px solid #2e353d;margin:4px 0 16px;"></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Chart 1: Seasonal monthly imports (MY-ordered x-axis) ────────────────
+    st.markdown(f"### 📈 Monthly Imports — Seasonal Comparison (TMT)")
+
+    # Build per-MY monthly totals (all selected partners)
+    df_chart = df[df["PARTNER"].isin(sel_partners)].copy()
+    my_monthly = (
+        df_chart.groupby(["MY_START", "MY_POS", "MONTH"])["TMT"].sum()
+        .reset_index()
+    )
+
     fig1 = go.Figure()
-    sorted_years = sorted(sel_years)
-    _ly_list = sorted([y for y in all_years if y < cur_year and y in sel_years])
-    ly = _ly_list[-1] if _ly_list else None
 
-    # Olympic avg (6-yr excluding high/low from all complete years)
-    complete_years = [y for y in all_years if y < cur_year][-8:]
-    oly_monthly = {}
-    for m in range(1, 13):
+    # Olympic avg over complete MYs (trim high/low per position)
+    oly_by_pos = {}
+    for pos in range(1, len(my_months) + 1):
         vals = []
-        for y in complete_years:
-            sub = monthly[(monthly["YEAR"] == y) & (monthly["MONTH"] == m)]
+        for s in complete_my_starts:
+            sub = my_monthly[(my_monthly["MY_START"] == s) & (my_monthly["MY_POS"] == pos)]
             if not sub.empty:
-                vals.append(sub["TMT"].values[0])
+                vals.append(float(sub["TMT"].sum()))
         if len(vals) >= 4:
-            vals_s = sorted(vals)
-            trimmed = vals_s[1:-1]
-            oly_monthly[m] = float(np.mean(trimmed))
+            oly_by_pos[pos] = float(np.mean(sorted(vals)[1:-1]))
 
-    if oly_monthly:
-        oly_x = [months_abbr[m-1] for m in sorted(oly_monthly.keys())]
-        oly_y = [oly_monthly[m] for m in sorted(oly_monthly.keys())]
-        oly_hover = [f"{v:,.0f} TMT" for v in oly_y]
+    if oly_by_pos:
+        oly_x = [my_labels[p-1] for p in sorted(oly_by_pos)]
+        oly_y = [oly_by_pos[p]  for p in sorted(oly_by_pos)]
         fig1.add_trace(go.Scatter(
             x=oly_x, y=oly_y, mode="lines", name="Olympic Avg",
             line=dict(color="#8a9aaa", width=2, dash="dot"),
-            customdata=oly_hover,
+            customdata=[f"{v:,.0f} TMT" for v in oly_y],
             hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
         ))
 
-    for yr in sorted_years:
-        yr_data = monthly[monthly["YEAR"] == yr].sort_values("MONTH")
-        if yr_data.empty:
+    sorted_chart_starts = sorted(chart_my_starts)
+    _prev_complete = [s for s in sorted_chart_starts if s < cur_my_start]
+    ly_start = _prev_complete[-1] if _prev_complete else None
+
+    for my_s in sorted_chart_starts:
+        lbl  = f"{my_s}/{str(my_s+1)[-2:]}"
+        sub  = my_monthly[my_monthly["MY_START"] == my_s].sort_values("MY_POS")
+        if sub.empty:
             continue
-        x_vals = [months_abbr[int(m)-1] for m in yr_data["MONTH"]]
-        y_vals = yr_data["TMT"].tolist()
+        x_vals = [my_labels[int(p)-1] for p in sub["MY_POS"]]
+        y_vals = sub["TMT"].tolist()
 
-        if yr == cur_year:
-            color, width, opacity = "#0693e3", 4.0, 1.0
-        elif yr == ly:
-            color, width, opacity = "#ffffff", 2.5, 0.90
+        if my_s == cur_my_start:
+            color, lw, op = "#0693e3", 4.0, 1.0
+        elif my_s == ly_start:
+            color, lw, op = "#ffffff", 2.5, 0.92
         else:
-            idx = sorted_years.index(yr)
-            t = idx / max(len(sorted_years) - 1, 1)
-            color   = f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})"
-            width   = 1.5
-            opacity = 0.25 + 0.45 * t
+            idx = sorted_chart_starts.index(my_s)
+            t   = idx / max(len(sorted_chart_starts) - 1, 1)
+            color = f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})"
+            lw, op = 1.5, 0.22 + 0.42 * t
 
-        hover_vals = [f"{v:,.0f} TMT" for v in y_vals]
         fig1.add_trace(go.Scatter(
-            x=x_vals, y=y_vals, mode="lines+markers",
-            name=str(yr),
-            line=dict(color=color, width=width),
-            opacity=opacity,
-            marker=dict(size=5 if yr == cur_year else 3),
-            customdata=hover_vals,
-            hovertemplate="%{x}: %{customdata}<extra>" + str(yr) + "</extra>",
+            x=x_vals, y=y_vals, mode="lines+markers", name=lbl,
+            line=dict(color=color, width=lw), opacity=op,
+            marker=dict(size=5 if my_s == cur_my_start else 3),
+            customdata=[f"{v:,.0f} TMT" for v in y_vals],
+            hovertemplate="%{x}: %{customdata}<extra>" + lbl + "</extra>",
         ))
 
+    my_conv = "Oct–Sep" if not is_wheat else "Jul–Jun"
     fig1.update_layout(
-        height=400,
+        height=420,
         plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
         font=dict(color="#c8d4e0", family="Arial", size=11),
-        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10)),
+        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10),
+                   categoryorder="array", categoryarray=my_labels),
         yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
         margin=dict(l=60, r=20, t=30, b=40),
         hovermode="x unified",
+        title=dict(
+            text=f"Marketing Year convention: {my_conv}",
+            font=dict(size=10, color="#8a9aaa"), x=1, xanchor="right", y=0.01,
+        ),
     )
     _add_chart_watermark(fig1, logo_b64)
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ── Chart 2: Partner breakdown for most recent selected year ─────────────
-    st.markdown(
-        f'<div style="font-family:Arial;font-size:13px;font-weight:700;'
-        f'color:#e0e8f0;margin:16px 0 4px;">'
-        f'Partner Breakdown — {max(sel_years)} (TMT by Month)</div>',
-        unsafe_allow_html=True,
-    )
+    # ── Chart 2: Stacked partner breakdown for selected MY ────────────────────
+    st.markdown(f"### 🌐 Source Country Breakdown — {sel_my_label}")
 
-    fig2 = go.Figure()
-    yr_sel = max(sel_years)
-    df_yr  = df[
-        (df["YEAR"] == yr_sel) & (df["PARTNER"].isin(sel_partners))
+    df_sel_my = df[
+        (df["MY_START"] == sel_my_start) & (df["PARTNER"].isin(sel_partners))
     ].copy()
 
-    fallback_idx = 0
+    fig2   = go.Figure()
+    fb_idx = 0
     for partner in sel_partners:
-        pdf = df_yr[df_yr["PARTNER"] == partner].sort_values("MONTH")
+        pdf = df_sel_my[df_sel_my["PARTNER"] == partner].sort_values("MY_POS")
         if pdf.empty:
             continue
-        x_vals  = [months_abbr[int(m)-1] for m in pdf["MONTH"]]
-        y_vals  = pdf["TMT"].tolist()
-        color   = _PARTNER_COLORS.get(partner)
-        if color is None:
-            color = _FALLBACK_COLORS[fallback_idx % len(_FALLBACK_COLORS)]
-            fallback_idx += 1
-        hover_vals = [f"{v:,.0f} TMT" for v in y_vals]
+        x_vals = [my_labels[int(p)-1] for p in pdf["MY_POS"]]
+        y_vals = pdf["TMT"].tolist()
+        color  = _PARTNER_COLORS.get(partner) or _FALLBACK_COLORS[fb_idx % len(_FALLBACK_COLORS)]
+        if partner not in _PARTNER_COLORS:
+            fb_idx += 1
         fig2.add_trace(go.Bar(
             name=partner, x=x_vals, y=y_vals,
             marker_color=color,
-            customdata=hover_vals,
+            customdata=[f"{v:,.0f} TMT" for v in y_vals],
             hovertemplate="%{x}: %{customdata}<extra>" + partner + "</extra>",
         ))
 
     fig2.update_layout(
-        barmode="stack",
-        height=380,
+        barmode="stack", height=380,
         plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
         font=dict(color="#c8d4e0", family="Arial", size=11),
-        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10)),
+        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10),
+                   categoryorder="array", categoryarray=my_labels),
         yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
         legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
         margin=dict(l=60, r=20, t=30, b=40),
@@ -2581,59 +2714,96 @@ def _run_china_imports_tab(logo_b64=None):
     _add_chart_watermark(fig2, logo_b64)
     st.plotly_chart(fig2, use_container_width=True)
 
-    # ── Summary stats table ───────────────────────────────────────────────────
-    st.markdown(
-        f'<div style="font-family:Arial;font-size:13px;font-weight:700;'
-        f'color:#e0e8f0;margin:16px 0 6px;">Annual Totals by Partner (TMT)</div>',
-        unsafe_allow_html=True,
-    )
+    # ── MY Totals Table (matching corn-tbl style) ─────────────────────────────
+    st.markdown("### 📋 Marketing Year Totals by Source Country (TMT)")
 
+    # Build pivot: rows=partner, cols=MY label (newest first)
+    df_tbl = df[df["PARTNER"].isin(sel_partners)].copy()
     ann = (
-        dff.groupby(["YEAR", "PARTNER"])["TMT"].sum()
+        df_tbl.groupby(["MY_LABEL", "MY_START", "PARTNER"])["TMT"].sum()
         .reset_index()
-        .pivot(index="PARTNER", columns="YEAR", values="TMT")
+    )
+    my_col_order = [
+        f"{s}/{str(s+1)[-2:]}" for s in reversed(sorted(ann["MY_START"].unique()))
+    ]
+    ann_pivot = (
+        ann.pivot_table(index="PARTNER", columns="MY_LABEL", values="TMT", aggfunc="sum")
+        .reindex(columns=my_col_order)
         .fillna(0)
     )
-    ann = ann[[c for c in sorted(ann.columns, reverse=True)]]  # newest first
 
-    # Build HTML table
-    yr_cols = list(ann.columns)
+    # Highlight current MY column
+    def _cell(val, is_cur=False, bold=False):
+        fmt = f"{val:,.0f}" if val else "—"
+        bg  = "#0693e3" if is_cur else "#32373c"
+        fw  = "700" if (is_cur or bold) else "400"
+        return (f'<td style="padding:5px 10px;text-align:right;white-space:nowrap;'
+                f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
+                f'background:{bg};color:#fff;font-weight:{fw};">{fmt}</td>')
+
     hdr_cells = "".join(
-        f'<th style="padding:7px 14px;text-align:right;color:#aab4c0;'
-        f'font-size:11px;text-transform:uppercase;letter-spacing:0.5px;'
-        f'border-bottom:2px solid {JSA_CYAN};">{int(y)}</th>'
-        for y in yr_cols
+        f'<th style="background:{"#0555a0" if col==cur_my_label else "#1e2124"};'
+        f'color:#fff;font-weight:600;text-align:center;padding:7px 10px;'
+        f'white-space:nowrap;border-right:1px solid #484f56;'
+        f'border-bottom:2px solid #0d0f11;font-family:Arial;font-size:12px;">'
+        f'{col}</th>'
+        for col in my_col_order
     )
     hdr = (
-        f'<th style="padding:7px 14px;text-align:left;color:#aab4c0;'
-        f'font-size:11px;text-transform:uppercase;letter-spacing:0.5px;'
-        f'border-bottom:2px solid {JSA_CYAN};">Country</th>' + hdr_cells
+        f'<th style="background:#2a2f35;color:#fff;font-weight:600;text-align:left;'
+        f'padding:7px 10px;white-space:nowrap;border-right:1px solid #484f56;'
+        f'border-bottom:2px solid #0d0f11;font-family:Arial;font-size:12px;'
+        f'position:sticky;left:0;z-index:3;">Country</th>'
+        + hdr_cells
     )
+
     tbl_rows = ""
-    for i, (partner, row) in enumerate(ann.iterrows()):
-        bg = "#21262c" if i % 2 == 0 else "#1d2227"
-        cells = "".join(
-            f'<td style="padding:7px 14px;text-align:right;'
-            f'color:#d0d8e0;font-size:12px;">{row[y]:,.0f}</td>'
-            for y in yr_cols
-        )
+    totals   = {col: 0.0 for col in my_col_order}
+    for i, (partner, row) in enumerate(ann_pivot.iterrows()):
+        bg = "#32373c" if i % 2 == 0 else "#2a2f35"
+        cells = ""
+        for col in my_col_order:
+            v = float(row.get(col, 0))
+            totals[col] += v
+            is_cur = (col == cur_my_label)
+            cells += _cell(v, is_cur=is_cur)
         tbl_rows += (
-            f'<tr style="background:{bg};">'
-            f'<td style="padding:7px 14px;color:#e0e8f0;font-size:12px;">{partner}</td>'
+            f'<tr>'
+            f'<td style="padding:5px 10px;text-align:left;white-space:nowrap;'
+            f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
+            f'background:{bg};color:#fff;font-weight:700;font-family:Arial;'
+            f'font-size:12px;position:sticky;left:0;z-index:2;">{partner}</td>'
             f'{cells}</tr>'
         )
 
+    # Total row
+    tot_cells = "".join(
+        _cell(totals[col], is_cur=(col == cur_my_label), bold=True)
+        for col in my_col_order
+    )
+    tbl_rows += (
+        f'<tr style="border-top:2px solid #0693e3;">'
+        f'<td style="padding:5px 10px;text-align:left;white-space:nowrap;'
+        f'border-bottom:1px solid #484f56;border-right:1px solid #484f56;'
+        f'background:#232729;color:#fff;font-weight:700;font-family:Arial;'
+        f'font-size:12px;position:sticky;left:0;z-index:2;">Total</td>'
+        f'{tot_cells}</tr>'
+    )
+
     st.markdown(
-        f'<div style="font-family:Arial;border-radius:6px;border:1px solid #2e353d;'
-        f'overflow-x:auto;">'
-        f'<table style="border-collapse:collapse;width:100%;">'
-        f'<thead><tr style="background:#151a1f;">{hdr}</tr></thead>'
+        f'<div style="overflow-x:auto;border-radius:6px;border:1px solid #484f56;'
+        f'font-family:Arial;font-size:12px;margin-bottom:12px;">'
+        f'<table style="border-collapse:collapse;width:max-content;min-width:100%;">'
+        f'<thead><tr style="background:#1e2124;">{hdr}</tr></thead>'
         f'<tbody>{tbl_rows}</tbody>'
         f'</table></div>',
         unsafe_allow_html=True,
     )
 
-    st.caption("Source: Trade Data Monitor (TDM) · China import declarations · Volumes in TMT")
+    st.caption(
+        f"Source: Trade Data Monitor (TDM) · China import declarations · "
+        f"MY convention: {'Jul–Jun' if is_wheat else 'Oct–Sep'} · Volumes in TMT"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

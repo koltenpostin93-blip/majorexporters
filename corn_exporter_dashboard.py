@@ -2328,6 +2328,315 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CHINA IMPORTS TAB  — live TDM data
+# ─────────────────────────────────────────────────────────────────────────────
+TDM_BASE = "https://www1.tdmlogin.com/tdm/api/api.asp"
+TDM_USER = "jpsi"
+
+TDM_PRODUCTS = {
+    "Corn (ex. seed)":     "205719",
+    "Soybeans (ex. seed)": "205714",
+    "Wheat (ex. seed)":    "205713",
+    "Soybean Meal":        "205717",
+}
+
+# Partners to highlight by default (all others still available via filter)
+TDM_KEY_PARTNERS = [
+    "United States", "Brazil", "Argentina", "Ukraine",
+    "Russia", "Australia", "Canada",
+]
+
+# Consistent colors per partner
+_PARTNER_COLORS = {
+    "United States": "#0693e3",
+    "Brazil":        "#4caf50",
+    "Argentina":     "#f9a825",
+    "Ukraine":       "#ef5350",
+    "Russia":        "#ab47bc",
+    "Australia":     "#26c6da",
+    "Canada":        "#ff7043",
+}
+_FALLBACK_COLORS = [
+    "#78909c","#a5d6a7","#ffe082","#ef9a9a",
+    "#ce93d8","#80deea","#ffab91","#b0bec5",
+]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_tdm_china(product_code: str, password: str) -> pd.DataFrame:
+    """Fetch China import data from TDM; cached 1 hour."""
+    import urllib.request
+    url = (
+        f"{TDM_BASE}?username={TDM_USER}&password={password}"
+        f"&reporter=CN&periodBegin=201401&periodEnd=202601"
+        f"&flow=I&partners=All&frequency=M&productCode={product_code}"
+        f"&levelDetail=6&levelDetailGroup=P&currency=USD&includeUnits=UNIT1"
+        f"&isoCountryCode=NONE&conv=1&separator=T&includeFlow=Y"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            raw = r.read()
+        data = raw.decode("utf-16")
+        lines = [l for l in data.strip().split("\n") if l.strip()]
+        if len(lines) < 2:
+            return pd.DataFrame()
+        header = lines[0].split("\t")
+        rows   = [l.split("\t") for l in lines[1:]]
+        df = pd.DataFrame(rows, columns=header)
+        df["YEAR"]  = pd.to_numeric(df["YEAR"],  errors="coerce")
+        df["MONTH"] = pd.to_numeric(df["MONTH"], errors="coerce")
+        df["QTY1"]  = pd.to_numeric(df["QTY1"],  errors="coerce")
+        df["TMT"]   = df["QTY1"] / 1000          # metric tonnes → TMT
+        return df.dropna(subset=["YEAR", "MONTH", "QTY1"])
+    except Exception as e:
+        return pd.DataFrame()
+
+
+def _run_china_imports_tab(logo_b64=None):
+    """China Imports tab — powered by live TDM API data."""
+
+    # ── Credentials ──────────────────────────────────────────────────────────
+    try:
+        pwd = st.secrets["TDM_PASSWORD"]
+    except Exception:
+        st.error(
+            "⚠️ TDM credentials missing. Add `TDM_PASSWORD` to Streamlit secrets "
+            "(share.streamlit.io → app → Settings → Secrets)."
+        )
+        return
+
+    # ── Controls row ─────────────────────────────────────────────────────────
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 3, 2])
+    with ctrl1:
+        commodity = st.selectbox(
+            "Commodity", list(TDM_PRODUCTS.keys()), key="cn_commodity"
+        )
+    product_code = TDM_PRODUCTS[commodity]
+
+    with st.spinner(f"Loading {commodity} data from TDM…"):
+        df = _fetch_tdm_china(product_code, pwd)
+
+    if df.empty:
+        st.warning("No data returned from TDM API. Check credentials or try again.")
+        return
+
+    all_partners = sorted(df["PARTNER"].dropna().unique().tolist())
+    all_years    = sorted(df["YEAR"].dropna().unique().astype(int).tolist())
+    cur_year     = max(all_years)
+    months_abbr  = ["Jan","Feb","Mar","Apr","May","Jun",
+                    "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+    with ctrl2:
+        default_partners = [p for p in TDM_KEY_PARTNERS if p in all_partners]
+        sel_partners = st.multiselect(
+            "Countries (partners)", all_partners,
+            default=default_partners, key="cn_partners"
+        )
+    with ctrl3:
+        default_yrs = [y for y in all_years if y >= cur_year - 5]
+        sel_years = st.multiselect(
+            "Years", all_years, default=default_yrs, key="cn_years"
+        )
+
+    if not sel_partners:
+        st.info("Select at least one partner country above.")
+        return
+    if not sel_years:
+        st.info("Select at least one year above.")
+        return
+
+    # ── Filter data ──────────────────────────────────────────────────────────
+    dff = df[df["PARTNER"].isin(sel_partners) & df["YEAR"].isin(sel_years)].copy()
+
+    # Monthly totals (all selected partners combined) per year
+    monthly = (
+        dff.groupby(["YEAR", "MONTH"])["TMT"].sum()
+        .reset_index()
+        .sort_values(["YEAR", "MONTH"])
+    )
+
+    # ── Chart 1: Seasonal monthly imports ────────────────────────────────────
+    st.markdown(
+        f'<div style="font-family:Arial;font-size:13px;font-weight:700;'
+        f'color:#e0e8f0;margin:12px 0 4px;">China {commodity} Imports — Monthly (TMT)</div>',
+        unsafe_allow_html=True,
+    )
+
+    fig1 = go.Figure()
+    sorted_years = sorted(sel_years)
+    ly = sorted([y for y in all_years if y < cur_year and y in sel_years],
+                default=[None])[-1]
+
+    # Olympic avg (6-yr excluding high/low from all complete years)
+    complete_years = [y for y in all_years if y < cur_year][-8:]
+    oly_monthly = {}
+    for m in range(1, 13):
+        vals = []
+        for y in complete_years:
+            sub = monthly[(monthly["YEAR"] == y) & (monthly["MONTH"] == m)]
+            if not sub.empty:
+                vals.append(sub["TMT"].values[0])
+        if len(vals) >= 4:
+            vals_s = sorted(vals)
+            trimmed = vals_s[1:-1]
+            oly_monthly[m] = float(np.mean(trimmed))
+
+    if oly_monthly:
+        oly_x = [months_abbr[m-1] for m in sorted(oly_monthly.keys())]
+        oly_y = [oly_monthly[m] for m in sorted(oly_monthly.keys())]
+        oly_hover = [f"{v:,.0f} TMT" for v in oly_y]
+        fig1.add_trace(go.Scatter(
+            x=oly_x, y=oly_y, mode="lines", name="Olympic Avg",
+            line=dict(color="#8a9aaa", width=2, dash="dot"),
+            customdata=oly_hover,
+            hovertemplate="%{x}: %{customdata}<extra>6-Yr Olympic Avg</extra>",
+        ))
+
+    for yr in sorted_years:
+        yr_data = monthly[monthly["YEAR"] == yr].sort_values("MONTH")
+        if yr_data.empty:
+            continue
+        x_vals = [months_abbr[int(m)-1] for m in yr_data["MONTH"]]
+        y_vals = yr_data["TMT"].tolist()
+
+        if yr == cur_year:
+            color, width, opacity = "#0693e3", 4.0, 1.0
+        elif yr == ly:
+            color, width, opacity = "#ffffff", 2.5, 0.90
+        else:
+            idx = sorted_years.index(yr)
+            t = idx / max(len(sorted_years) - 1, 1)
+            color   = f"rgb({int(100+80*t)},{int(120+80*t)},{int(155+65*t)})"
+            width   = 1.5
+            opacity = 0.25 + 0.45 * t
+
+        hover_vals = [f"{v:,.0f} TMT" for v in y_vals]
+        fig1.add_trace(go.Scatter(
+            x=x_vals, y=y_vals, mode="lines+markers",
+            name=str(yr),
+            line=dict(color=color, width=width),
+            opacity=opacity,
+            marker=dict(size=5 if yr == cur_year else 3),
+            customdata=hover_vals,
+            hovertemplate="%{x}: %{customdata}<extra>" + str(yr) + "</extra>",
+        ))
+
+    fig1.update_layout(
+        height=400,
+        plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
+        font=dict(color="#c8d4e0", family="Arial", size=11),
+        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10)),
+        yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        margin=dict(l=60, r=20, t=30, b=40),
+        hovermode="x unified",
+    )
+    _add_chart_watermark(fig1, logo_b64)
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # ── Chart 2: Partner breakdown for most recent selected year ─────────────
+    st.markdown(
+        f'<div style="font-family:Arial;font-size:13px;font-weight:700;'
+        f'color:#e0e8f0;margin:16px 0 4px;">'
+        f'Partner Breakdown — {max(sel_years)} (TMT by Month)</div>',
+        unsafe_allow_html=True,
+    )
+
+    fig2 = go.Figure()
+    yr_sel = max(sel_years)
+    df_yr  = df[
+        (df["YEAR"] == yr_sel) & (df["PARTNER"].isin(sel_partners))
+    ].copy()
+
+    fallback_idx = 0
+    for partner in sel_partners:
+        pdf = df_yr[df_yr["PARTNER"] == partner].sort_values("MONTH")
+        if pdf.empty:
+            continue
+        x_vals  = [months_abbr[int(m)-1] for m in pdf["MONTH"]]
+        y_vals  = pdf["TMT"].tolist()
+        color   = _PARTNER_COLORS.get(partner)
+        if color is None:
+            color = _FALLBACK_COLORS[fallback_idx % len(_FALLBACK_COLORS)]
+            fallback_idx += 1
+        hover_vals = [f"{v:,.0f} TMT" for v in y_vals]
+        fig2.add_trace(go.Bar(
+            name=partner, x=x_vals, y=y_vals,
+            marker_color=color,
+            customdata=hover_vals,
+            hovertemplate="%{x}: %{customdata}<extra>" + partner + "</extra>",
+        ))
+
+    fig2.update_layout(
+        barmode="stack",
+        height=380,
+        plot_bgcolor="#1a1e22", paper_bgcolor="#1a1e22",
+        font=dict(color="#c8d4e0", family="Arial", size=11),
+        xaxis=dict(gridcolor="#2e353d", tickfont=dict(size=10)),
+        yaxis=dict(gridcolor="#2e353d", title="TMT", tickformat=",.0f"),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10)),
+        margin=dict(l=60, r=20, t=30, b=40),
+        hovermode="x unified",
+    )
+    _add_chart_watermark(fig2, logo_b64)
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Summary stats table ───────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="font-family:Arial;font-size:13px;font-weight:700;'
+        f'color:#e0e8f0;margin:16px 0 6px;">Annual Totals by Partner (TMT)</div>',
+        unsafe_allow_html=True,
+    )
+
+    ann = (
+        dff.groupby(["YEAR", "PARTNER"])["TMT"].sum()
+        .reset_index()
+        .pivot(index="PARTNER", columns="YEAR", values="TMT")
+        .fillna(0)
+    )
+    ann = ann[[c for c in sorted(ann.columns, reverse=True)]]  # newest first
+
+    # Build HTML table
+    yr_cols = list(ann.columns)
+    hdr_cells = "".join(
+        f'<th style="padding:7px 14px;text-align:right;color:#aab4c0;'
+        f'font-size:11px;text-transform:uppercase;letter-spacing:0.5px;'
+        f'border-bottom:2px solid {JSA_CYAN};">{int(y)}</th>'
+        for y in yr_cols
+    )
+    hdr = (
+        f'<th style="padding:7px 14px;text-align:left;color:#aab4c0;'
+        f'font-size:11px;text-transform:uppercase;letter-spacing:0.5px;'
+        f'border-bottom:2px solid {JSA_CYAN};">Country</th>' + hdr_cells
+    )
+    tbl_rows = ""
+    for i, (partner, row) in enumerate(ann.iterrows()):
+        bg = "#21262c" if i % 2 == 0 else "#1d2227"
+        cells = "".join(
+            f'<td style="padding:7px 14px;text-align:right;'
+            f'color:#d0d8e0;font-size:12px;">{row[y]:,.0f}</td>'
+            for y in yr_cols
+        )
+        tbl_rows += (
+            f'<tr style="background:{bg};">'
+            f'<td style="padding:7px 14px;color:#e0e8f0;font-size:12px;">{partner}</td>'
+            f'{cells}</tr>'
+        )
+
+    st.markdown(
+        f'<div style="font-family:Arial;border-radius:6px;border:1px solid #2e353d;'
+        f'overflow-x:auto;">'
+        f'<table style="border-collapse:collapse;width:100%;">'
+        f'<thead><tr style="background:#151a1f;">{hdr}</tr></thead>'
+        f'<tbody>{tbl_rows}</tbody>'
+        f'</table></div>',
+        unsafe_allow_html=True,
+    )
+
+    st.caption("Source: Trade Data Monitor (TDM) · China import declarations · Volumes in TMT")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MARKETING YEARS REFERENCE TAB
 # ─────────────────────────────────────────────────────────────────────────────
 def _render_my_reference_tab():
@@ -2525,8 +2834,9 @@ def main():
     unit_decimals = 1      if use_bushels else 0
 
     # ── Top-level commodity tabs ──────────────────────────────────────────
-    corn_tab, soy_tab, meal_tab, wheat_tab, ref_tab = st.tabs(
-        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat", "📅  Marketing Years"]
+    corn_tab, soy_tab, meal_tab, wheat_tab, china_tab, ref_tab = st.tabs(
+        ["🌽  Corn", "🫘  Soybeans", "🌾  Soybean Meal", "🌿  Wheat",
+         "🇨🇳  China Imports", "📅  Marketing Years"]
     )
 
     with corn_tab:
@@ -2547,6 +2857,12 @@ def main():
                            unit_long, logo_white_b64)
         except Exception as _e:
             st.error(f"Wheat tab error: {_e}")
+
+    with china_tab:
+        try:
+            _run_china_imports_tab(logo_b64=logo_white_b64)
+        except Exception as _e:
+            st.error(f"China Imports tab error: {_e}")
 
     with ref_tab:
         try:

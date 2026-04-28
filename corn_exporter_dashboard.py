@@ -505,6 +505,11 @@ def build_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
         m, y = row["Month"], row["MarketYear"]
         if m not in pivot:
             continue
+        # Normalise year to str so sorted() never sees mixed int/float/str
+        try:
+            y = str(int(float(y)))
+        except (ValueError, TypeError):
+            y = str(y)
         val = row[field]
         pivot[m][y] = None if pd.isna(val) else float(val)
     all_years = sorted({y for md in pivot.values() for y in md})

@@ -645,10 +645,10 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
     # Pace ratio: how far above/below the seasonal baseline we are YTD
     pace_ratio = (ytd_actual / ytd_expected) if ytd_expected > 0 else 1.0
 
-    # Model 1 pivot — fill blank months with USDA seasonal value
+    # Model 1 pivot — fill non-official months (estimate + blank) with USDA seasonal value
     def _make_pivot(fcst_factor: float) -> dict:
         piv = {m: dict(monthly_pivot[m]) for m in months}
-        for m in blank_months:
+        for m in non_official_months:
             if m in shares:
                 piv[m][cy] = usda_total * shares[m]["olympic"] / 100.0 * fcst_factor
         return piv
@@ -684,7 +684,7 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
         "model1_total":    ytd_actual + m1_remaining,
         "model2_total":    ytd_actual + m2_remaining,
         "sigma_remaining": sigma_remaining,
-        "forecast_months": blank_months,   # chart line covers blank months only
+        "forecast_months": non_official_months,   # chart covers estimate + blank months
     }
     return model1_pivot, model2_pivot, pace_info
 
@@ -920,53 +920,91 @@ _TABLE_CSS = """
 .corn-tbl tr.total-row td.est-cy-cell { background: #5a4000 !important; color: #ffe082 !important; }
 .est-badge { background:#7a5800; border:1px dashed #f9a825; padding:2px 8px;
              border-radius:3px; color:#ffe082; font-weight:600; }
+.corn-tbl th.m1-hdr { background: #3d0a5a !important; color: #ce93d8 !important; }
+.corn-tbl th.m2-hdr { background: #00363d !important; color: #80deea !important; }
+.corn-tbl td.m1-cell { background: #3d0a5a !important; color: #ce93d8 !important;
+                        font-weight: 600 !important; border-top: 1px dotted #9c27b0 !important;
+                        border-bottom: 1px dotted #9c27b0 !important; }
+.corn-tbl td.m2-cell { background: #00363d !important; color: #80deea !important;
+                        font-weight: 600 !important; border-top: 1px dashed #00bcd4 !important;
+                        border-bottom: 1px dashed #00bcd4 !important; }
+.corn-tbl tr.total-row td.m1-cell { background: #2a0040 !important; color: #ce93d8 !important; }
+.corn-tbl tr.total-row td.m2-cell { background: #002a30 !important; color: #80deea !important; }
+.corn-tbl td.m-dash { background: #1e2124 !important; color: #4a5568 !important; }
 </style>
 """
 
 def render_table_html(data_pivot, stats, all_years, cy, ly, months,
                       decimals: int = 0,
-                      cy_est_months: set | None = None) -> str:
+                      cy_est_months: set | None = None,
+                      model1_pivot: dict | None = None,
+                      model2_pivot: dict | None = None,
+                      drop_oldest: int = 2) -> str:
     """Render the data table as HTML.
 
-    cy_est_months : set of month names in the current MY that are Estimates
-                    (past the official data cutoff).  None / empty = all official.
+    cy_est_months : set of month names in the current MY that are Estimates.
+    model1_pivot  : USDA Seasonal forecast pivot; adds M1 Fcst column when provided.
+    model2_pivot  : Pace-Adjusted forecast pivot; adds M2 Fcst column when provided.
+    drop_oldest   : number of oldest marketing years to hide from the table.
     """
     fn = lambda v: fmt_num(v, decimals)
-    W  = dict(month=65, stat=94, pct=112, year=90)
+    W  = dict(month=65, stat=94, pct=112, year=90, fcst=90)
     est_months = cy_est_months or set()
+    has_fcst   = model1_pivot is not None
+
+    # Years to display: drop the oldest N to make room for M1/M2 columns
+    display_years = sorted(all_years)
+    if drop_oldest > 0 and len(display_years) > drop_oldest:
+        display_years = display_years[drop_oldest:]
 
     def sticky_left(w):
         return f"position:sticky;left:0;min-width:{w}px;z-index:2;"
 
+    # Build sticky-right offset array.
+    # Columns right→left: % vs Oly, % vs LY, Max, Min, Oly Avg,
+    #   [M2 Fcst, M1 Fcst if has_fcst], CY
     R = [0]
-    R.append(R[-1] + W["pct"])
-    R.append(R[-1] + W["pct"])
-    R.append(R[-1] + W["stat"])
-    R.append(R[-1] + W["stat"])
-    R.append(R[-1] + W["stat"])
+    R.append(R[-1] + W["pct"])   # R[1]
+    R.append(R[-1] + W["pct"])   # R[2]
+    R.append(R[-1] + W["stat"])  # R[3]
+    R.append(R[-1] + W["stat"])  # R[4]  — Oly Avg
+    R.append(R[-1] + W["stat"])  # R[5]  — M2 or CY (no-fcst)
+    if has_fcst:
+        R.append(R[-1] + W["fcst"])  # R[6]  — M1
+        R.append(R[-1] + W["fcst"])  # R[7]  — CY
+    cy_r  = 7 if has_fcst else 5
+    m2_r  = 5
+    m1_r  = 6
 
     def sticky_right(r_idx, w):
         return f"position:sticky;right:{R[r_idx]}px;min-width:{w}px;z-index:5;"
 
+    # ── Header ───────────────────────────────────────────────────────────────
     hdr = (f'<th class="stat-hdr" '
            f'style="{sticky_left(W["month"])};text-align:left;z-index:10;">Month</th>')
-    for year in all_years:
+    for year in display_years:
         if year == cy:
             continue
         hdr += f'<th style="min-width:{W["year"]}px;">{year}</th>'
 
-    for r_idx, w, cls, lbl in [
-        (5, W["year"], "cy-hdr left-divider", cy),
-        (4, W["stat"], "stat-hdr",            "6-Yr<br>Oly Avg"),
-        (3, W["stat"], "stat-hdr",            "Min"),
-        (2, W["stat"], "stat-hdr",            "Max"),
-        (1, W["pct"],  "stat-hdr",            "% Chg<br>CY vs LY"),
-        (0, W["pct"],  "stat-hdr",            "% Chg CY<br>vs Oly Avg"),
-    ]:
+    sticky_cols = [
+        (cy_r, W["year"], "cy-hdr left-divider", cy),
+        (4,    W["stat"], "stat-hdr",            "6-Yr<br>Oly Avg"),
+        (3,    W["stat"], "stat-hdr",            "Min"),
+        (2,    W["stat"], "stat-hdr",            "Max"),
+        (1,    W["pct"],  "stat-hdr",            "% Chg<br>CY vs LY"),
+        (0,    W["pct"],  "stat-hdr",            "% Chg CY<br>vs Oly Avg"),
+    ]
+    if has_fcst:
+        sticky_cols.insert(1, (m1_r, W["fcst"], "m1-hdr", "M1<br>Fcst"))
+        sticky_cols.insert(2, (m2_r, W["fcst"], "m2-hdr", "M2<br>Fcst"))
+    for r_idx, w, cls, lbl in sticky_cols:
         hdr += f'<th class="{cls}" style="{sticky_right(r_idx, w)}">{lbl}</th>'
 
+    # ── Row builder ──────────────────────────────────────────────────────────
     def build_row(label, s, year_data, is_total=False):
-        valid = [(y, year_data[y]) for y in all_years
+        # Top/bottom highlights only across visible years
+        valid = [(y, year_data[y]) for y in display_years
                  if y != cy and year_data.get(y) is not None]
         srt  = sorted(valid, key=lambda x: x[1])
         n    = len(srt)
@@ -975,7 +1013,7 @@ def render_table_html(data_pivot, stats, all_years, cy, ly, months,
         bot2 -= top2
 
         row = f'<td class="m-cell" style="{sticky_left(W["month"])}">{label}</td>'
-        for year in all_years:
+        for year in display_years:
             if year == cy:
                 continue
             val = year_data.get(year)
@@ -990,18 +1028,45 @@ def render_table_html(data_pivot, stats, all_years, cy, ly, months,
         pc_oly = s["pct_vs_oly"]
         cy_val = year_data.get(cy)
 
-        # CY cell gets estimate styling if this month (or TOTAL) is an estimate
+        # CY cell — estimate styling if past the official cutoff
         is_est = (label in est_months) or (is_total and bool(est_months))
         cy_cls = "est-cy-cell left-divider" if is_est else "cy-cell left-divider"
 
-        for r_idx, w, cls, val_str, xtra in [
-            (5, W["year"], cy_cls,   fn(cy_val),       ""),
-            (4, W["stat"], "s-cell", fn(s["oly_avg"]), ""),
-            (3, W["stat"], "s-cell", fn(s["min"]),     ""),
-            (2, W["stat"], "s-cell", fn(s["max"]),     ""),
-            (1, W["pct"],  "p-cell", fmt_pct(pc_ly),  f"color:{pct_color(pc_ly)};"),
-            (0, W["pct"],  "p-cell", fmt_pct(pc_oly), f"color:{pct_color(pc_oly)};"),
-        ]:
+        # M1 / M2 forecast values — show for non-official months and TOTAL row
+        if has_fcst:
+            is_nonoff = (label in est_months) or (cy_val is None and not is_total)
+            if is_total:
+                # Implied full-MY totals: sum all months from model pivots
+                m1_val = (sum(v for m in months
+                              if (v := model1_pivot[m].get(cy)) is not None)
+                          if model1_pivot else None)
+                m2_val = (sum(v for m in months
+                              if (v := model2_pivot[m].get(cy)) is not None)
+                          if model2_pivot else None)
+                m1_cls = "m1-cell"
+                m2_cls = "m2-cell"
+            elif is_nonoff:
+                m1_val = model1_pivot[label].get(cy) if model1_pivot else None
+                m2_val = model2_pivot[label].get(cy) if model2_pivot else None
+                m1_cls = "m1-cell"
+                m2_cls = "m2-cell"
+            else:
+                m1_val = m2_val = None
+                m1_cls = m2_cls = "m-dash"
+
+        stat_cols = [
+            (cy_r, W["year"], cy_cls,   fn(cy_val),       ""),
+            (4,    W["stat"], "s-cell", fn(s["oly_avg"]), ""),
+            (3,    W["stat"], "s-cell", fn(s["min"]),     ""),
+            (2,    W["stat"], "s-cell", fn(s["max"]),     ""),
+            (1,    W["pct"],  "p-cell", fmt_pct(pc_ly),  f"color:{pct_color(pc_ly)};"),
+            (0,    W["pct"],  "p-cell", fmt_pct(pc_oly), f"color:{pct_color(pc_oly)};"),
+        ]
+        if has_fcst:
+            stat_cols.insert(1, (m1_r, W["fcst"], m1_cls, fn(m1_val), ""))
+            stat_cols.insert(2, (m2_r, W["fcst"], m2_cls, fn(m2_val), ""))
+
+        for r_idx, w, cls, val_str, xtra in stat_cols:
             row += (f'<td class="{cls}" style="{sticky_right(r_idx, w)}{xtra}">'
                     f'{val_str}</td>')
 
@@ -2275,7 +2340,9 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         st.markdown(
             render_table_html(monthly_pivot, monthly_stats, all_years,
                               cy, ly, months, decimals=unit_decimals,
-                              cy_est_months=cy_est_months),
+                              cy_est_months=cy_est_months,
+                              model1_pivot=model1_pivot,
+                              model2_pivot=model2_pivot),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
@@ -2301,7 +2368,9 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         st.markdown(
             render_table_html(cum_pivot, cum_stats, all_years,
                               cy, ly, months, decimals=unit_decimals,
-                              cy_est_months=cy_est_months),
+                              cy_est_months=cy_est_months,
+                              model1_pivot=cum_model1,
+                              model2_pivot=cum_model2),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
@@ -2811,16 +2880,18 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
             f"Stats reflect prior marketing years only.",
             unsafe_allow_html=True,
         )
-        st.markdown(
-            render_table_html(monthly_pivot, monthly_stats, all_years,
-                              cy, ly, months, decimals=unit_decimals,
-                              cy_est_months=cy_est_months),
-            unsafe_allow_html=True,
-        )
         cum_model1_w = (build_cumulative_pivot(model1_pivot_w, all_years, months)
                         if model1_pivot_w else None)
         cum_model2_w = (build_cumulative_pivot(model2_pivot_w, all_years, months)
                         if model2_pivot_w else None)
+        st.markdown(
+            render_table_html(monthly_pivot, monthly_stats, all_years,
+                              cy, ly, months, decimals=unit_decimals,
+                              cy_est_months=cy_est_months,
+                              model1_pivot=model1_pivot_w,
+                              model2_pivot=model2_pivot_w),
+            unsafe_allow_html=True,
+        )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
                                 field_label, False, months,
@@ -2844,7 +2915,9 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         st.markdown(
             render_table_html(cum_pivot, cum_stats, all_years,
                               cy, ly, months, decimals=unit_decimals,
-                              cy_est_months=cy_est_months),
+                              cy_est_months=cy_est_months,
+                              model1_pivot=cum_model1_w,
+                              model2_pivot=cum_model2_w),
             unsafe_allow_html=True,
         )
         st.plotly_chart(

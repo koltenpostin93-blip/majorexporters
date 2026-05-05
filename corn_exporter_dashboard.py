@@ -1278,6 +1278,7 @@ def make_snapshot_chart(snap_data, commodity_label, selected_year_label,
 def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
                         arbr_local_my: bool = True,
                         us_local_my: bool = True) -> list:
+    cutoffs = load_cutoff_config()   # cached — no performance cost
     tiles = []
     for field in cfg["tile_order"]:
         # Determine marketing year convention for this field
@@ -1317,8 +1318,13 @@ def _compute_tile_stats(df, use_bushels, unit_factor, cfg,
         if use_bushels:
             pivot = _apply_unit(pivot, unit_factor)
 
+        # Months in the current MY that are estimates — skip these on tiles
+        est_months = _cy_estimate_months(field, cutoffs, months_list)
+
         latest_month = latest_val = None
         for m in reversed(months_list):
+            if m in est_months:          # only show official data on tiles
+                continue
             v = pivot[m].get(cy)
             if v is not None:
                 latest_month, latest_val = m, v

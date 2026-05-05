@@ -551,7 +551,7 @@ _FORECAST_COMMODITY_MAP = {
     "wheat": "wheat", "Wheat": "wheat",
 }
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_forecast_config() -> dict:
     """Read Forecast sheet → {(commodity_key, country_field): usda_total_tmt}.
     Returns {} if sheet is missing or all values are blank."""
@@ -2212,7 +2212,14 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     if _usda_saved:
         _saved_display = float(_usda_saved) * unit_factor if use_bushels else float(_usda_saved)
 
-    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(_saved_display)):
+    # Pre-seed session state from Excel so the widget shows the saved value
+    # even after a page reload.  Only overrides when the key doesn't exist yet
+    # (preserves any value the user has already typed this session).
+    _usda_key = f"{pfx}_{field}_usda_input"
+    if _saved_display > 0 and _usda_key not in st.session_state:
+        st.session_state[_usda_key] = _saved_display
+
+    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(st.session_state.get(_usda_key, _saved_display))):
         _fc1, _fc2 = st.columns([2, 3])
         with _fc1:
             usda_input = st.number_input(
@@ -2221,7 +2228,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                 value=_saved_display,
                 step=500.0,
                 format="%.0f",
-                key=f"{pfx}_{field}_usda_input",
+                key=_usda_key,
                 help=(
                     f"Enter the USDA WASDE marketing year total for {field_label} "
                     f"in {unit_short}. This drives the Seasonal and Pace-Adjusted "
@@ -2758,7 +2765,11 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     if _usda_saved_w:
         _saved_disp_w = float(_usda_saved_w) * unit_factor if use_bushels else float(_usda_saved_w)
 
-    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(_saved_disp_w)):
+    _usda_key_w = f"wheat_{field}_usda_input"
+    if _saved_disp_w > 0 and _usda_key_w not in st.session_state:
+        st.session_state[_usda_key_w] = _saved_disp_w
+
+    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(st.session_state.get(_usda_key_w, _saved_disp_w))):
         _fw1, _fw2 = st.columns([2, 3])
         with _fw1:
             usda_input_w = st.number_input(
@@ -2767,7 +2778,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                 value=_saved_disp_w,
                 step=500.0,
                 format="%.0f",
-                key=f"wheat_{field}_usda_input",
+                key=_usda_key_w,
                 help=(
                     f"Enter the USDA WASDE marketing year total for {field_label} "
                     f"in {unit_short}."

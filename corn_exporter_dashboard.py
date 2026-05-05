@@ -541,6 +541,149 @@ def _cy_estimate_months(field: str, cutoffs: dict[str, str],
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FORECAST CONFIG & MODELS
+# ─────────────────────────────────────────────────────────────────────────────
+_FORECAST_COMMODITY_MAP = {
+    "corn": "corn", "Corn": "corn",
+    "soybeans": "soybeans", "Soybeans": "soybeans",
+    "soybeanmeal": "soybeanmeal", "SoybeanMeal": "soybeanmeal",
+    "soybean meal": "soybeanmeal", "Soybean Meal": "soybeanmeal",
+    "wheat": "wheat", "Wheat": "wheat",
+}
+
+@st.cache_data(show_spinner=False)
+def load_forecast_config() -> dict:
+    """Read Forecast sheet → {(commodity_key, country_field): usda_total_tmt}.
+    Returns {} if sheet is missing or all values are blank."""
+    try:
+        df = pd.read_excel(EXCEL_PATH, sheet_name="Forecast", header=0)
+        result = {}
+        for _, row in df.iterrows():
+            comm    = _FORECAST_COMMODITY_MAP.get(str(row.get("Commodity", "")).strip(), "")
+            country = str(row.get("Country", "")).strip()
+            val     = row.get("USDA_MY_Total_TMT", None)
+            if not comm or not country:
+                continue
+            try:
+                fval = float(val)
+                if fval > 0:
+                    result[(comm, country)] = fval
+            except (ValueError, TypeError):
+                pass
+        return result
+    except Exception:
+        return {}
+
+
+def _compute_seasonal_shares(monthly_pivot: dict, complete_years: list,
+                              months: list) -> dict:
+    """Compute robust monthly share distributions from complete historical years.
+
+    Returns {month: {'mean': float, 'olympic': float, 'std': float}}
+    where values are percentage of marketing-year total (0-100).
+    Uses olympic average (drop high/low) when ≥4 years are available.
+    """
+    if len(complete_years) < 2:
+        return {}
+    # MY total per year
+    year_totals = {}
+    for yr in complete_years:
+        total = sum((monthly_pivot[m].get(yr) or 0) for m in months)
+        if total > 0:
+            year_totals[yr] = total
+
+    shares_by_month: dict[str, list] = {m: [] for m in months}
+    for yr, total in year_totals.items():
+        for m in months:
+            val = monthly_pivot[m].get(yr)
+            if val is not None:
+                shares_by_month[m].append(val / total * 100.0)
+
+    result = {}
+    for m in months:
+        vals = shares_by_month[m]
+        if len(vals) < 2:
+            continue
+        mean_v = float(np.mean(vals))
+        std_v  = float(np.std(vals, ddof=1))
+        oly_v  = float(np.mean(sorted(vals)[1:-1])) if len(vals) >= 4 else mean_v
+        result[m] = {"mean": mean_v, "olympic": oly_v, "std": std_v}
+    return result
+
+
+def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
+                            months: list, shares: dict,
+                            usda_total: float | None,
+                            cy_est_months: set) -> tuple:
+    """Build Model 1 (USDA Seasonal) and Model 2 (Pace-Adjusted) forecast pivots.
+
+    Returns: (model1_pivot, model2_pivot, pace_info)
+      model1_pivot  – full pivot where CY forecast months = USDA × olympic share
+      model2_pivot  – same but pace-adjusted (40% YTD deviation carried forward)
+      pace_info     – dict of KPIs for the forecast panel
+    """
+    if not usda_total or not shares:
+        return None, None, {}
+
+    # Months that have official actuals in CY (not estimate, not blank)
+    official_months = {m for m in months
+                       if monthly_pivot[m].get(cy) is not None
+                       and m not in cy_est_months}
+
+    # Months with no CY data at all (pure forecast)
+    forecast_months = [m for m in months if monthly_pivot[m].get(cy) is None]
+
+    # YTD actual (official only) & YTD seasonal expected
+    ytd_actual   = sum((monthly_pivot[m].get(cy) or 0) for m in official_months)
+    ytd_share    = sum(shares[m]["olympic"] for m in official_months if m in shares)
+    ytd_expected = usda_total * ytd_share / 100.0 if ytd_share > 0 else 0.0
+
+    # Pace ratio: how far above/below the seasonal baseline we are YTD
+    pace_ratio = (ytd_actual / ytd_expected) if ytd_expected > 0 else 1.0
+
+    # Model 1 — pure USDA seasonal
+    def _make_pivot(fcst_factor: float) -> dict:
+        piv = {m: dict(monthly_pivot[m]) for m in months}
+        for m in forecast_months:
+            if m in shares:
+                piv[m][cy] = usda_total * shares[m]["olympic"] / 100.0 * fcst_factor
+        return piv
+
+    # Model 2 — 40 % of YTD pace deviation carried into remaining months
+    PERSISTENCE = 0.40
+    adj_factor  = 1.0 + PERSISTENCE * (pace_ratio - 1.0)
+
+    model1_pivot = _make_pivot(1.0)
+    model2_pivot = _make_pivot(adj_factor) if official_months else None
+
+    # Implied full-MY totals under each model
+    m1_remaining = sum(usda_total * shares[m]["olympic"] / 100.0
+                       for m in forecast_months if m in shares)
+    m2_remaining = m1_remaining * adj_factor if official_months else m1_remaining
+
+    # Uncertainty: ±1σ on the forecast portion
+    sigma_remaining = sum(
+        (usda_total * shares[m]["std"] / 100.0) ** 2
+        for m in forecast_months if m in shares
+    ) ** 0.5
+
+    pace_info = {
+        "usda_total":      usda_total,
+        "ytd_actual":      ytd_actual,
+        "ytd_expected":    ytd_expected,
+        "pace_ratio":      pace_ratio,
+        "pace_pct":        (pace_ratio - 1.0) * 100.0,
+        "has_ytd":         bool(official_months),
+        "adj_factor":      adj_factor,
+        "model1_total":    ytd_actual + m1_remaining,
+        "model2_total":    ytd_actual + m2_remaining,
+        "sigma_remaining": sigma_remaining,
+        "forecast_months": forecast_months,
+    }
+    return model1_pivot, model2_pivot, pace_info
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PIVOT BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 def build_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
@@ -910,7 +1053,12 @@ def _year_style(year, cy, ly, all_years) -> tuple:
 def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                         field_label, is_cumulative, months,
                         logo_b64=None, unit_short="TMT",
-                        cy_est_months: set | None = None) -> go.Figure:
+                        cy_est_months: set | None = None,
+                        model1_pivot: dict | None = None,
+                        model2_pivot: dict | None = None,
+                        shares: dict | None = None,
+                        usda_total: float | None = None,
+                        pace_info: dict | None = None) -> go.Figure:
     """Build the seasonal shipments chart.
 
     cy_est_months : set of month names classified as Estimate in the current MY.
@@ -1070,6 +1218,84 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 customdata=yr_hover,
                 hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
             ))
+
+    # ── Forecast traces (Model 1 & Model 2) ──────────────────────────────
+    pi = pace_info or {}
+    fcst_months_set = set(pi.get("forecast_months", []))
+
+    if model1_pivot and fcst_months_set and usda_total:
+        dec_ = 1 if unit_short == "Mbu" else 0
+
+        # Find the last CY data point to connect forecast to actuals
+        conn_m = conn_v = None
+        for m in months:
+            if data_pivot[m].get(cy) is not None:
+                conn_m, conn_v = m, data_pivot[m][cy]
+
+        # ±1σ forecast uncertainty band
+        if shares:
+            band_x, band_hi, band_lo = [], [], []
+            for m in months:
+                if m in fcst_months_set and m in shares:
+                    center = usda_total * shares[m]["olympic"] / 100.0
+                    sigma  = usda_total * shares[m]["std"] / 100.0
+                    band_x.append(m)
+                    band_hi.append(center + sigma)
+                    band_lo.append(max(0.0, center - sigma))
+            if band_x:
+                fig.add_trace(go.Scatter(
+                    x=band_x + band_x[::-1],
+                    y=band_hi + band_lo[::-1],
+                    fill="toself", fillcolor="rgba(156,39,176,0.13)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name="Forecast ±1σ",
+                    hoverinfo="skip", showlegend=True, legendrank=950,
+                ))
+
+        # Model 1 — USDA Seasonal
+        m1_x = ([conn_m] if conn_m else []) + [m for m in months if m in fcst_months_set]
+        m1_y = ([conn_v] if conn_m else []) + [
+            model1_pivot[m].get(cy) for m in months if m in fcst_months_set
+        ]
+        m1_hover = [
+            f"{v:,.{dec_}f} {unit_short}" if v is not None else "—"
+            for v in m1_y
+        ]
+        if len(m1_x) > 1:
+            fig.add_trace(go.Scatter(
+                x=m1_x, y=m1_y, mode="lines+markers",
+                name="Forecast — USDA Seasonal",
+                line=dict(color="#9c27b0", width=2.5, dash="dot"),
+                marker=dict(symbol="diamond-open", size=7, color="#9c27b0",
+                            line=dict(width=2, color="#9c27b0")),
+                connectgaps=True, legendrank=5,
+                customdata=m1_hover,
+                hovertemplate="%{x}: %{customdata}<extra>USDA Seasonal Fcst</extra>",
+            ))
+
+        # Model 2 — Pace-Adjusted (only when YTD actuals exist)
+        if model2_pivot and pi.get("has_ytd"):
+            m2_x = m1_x
+            m2_y = ([conn_v] if conn_m else []) + [
+                model2_pivot[m].get(cy) for m in months if m in fcst_months_set
+            ]
+            m2_hover = [
+                f"{v:,.{dec_}f} {unit_short}" if v is not None else "—"
+                for v in m2_y
+            ]
+            adj_pct = (pi.get("adj_factor", 1.0) - 1.0) * 100.0
+            adj_lbl = f"{adj_pct:+.1f}% pace adj"
+            if len(m2_x) > 1:
+                fig.add_trace(go.Scatter(
+                    x=m2_x, y=m2_y, mode="lines+markers",
+                    name=f"Forecast — Pace Adj ({adj_lbl})",
+                    line=dict(color="#00bcd4", width=2.0, dash="dashdot"),
+                    marker=dict(symbol="triangle-up-open", size=7, color="#00bcd4",
+                                line=dict(width=2, color="#00bcd4")),
+                    connectgaps=True, legendrank=6,
+                    customdata=m2_hover,
+                    hovertemplate="%{x}: %{customdata}<extra>Pace-Adj Fcst</extra>",
+                ))
 
     fig.update_layout(**_base_layout(
         f"Seasonal {lbl}Shipments — {field_label} ({unit_short})",
@@ -1634,6 +1860,92 @@ def _compute_wheat_snapshot_data(df, cfg, use_bushels, unit_factor,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FORECAST PANEL
+# ─────────────────────────────────────────────────────────────────────────────
+def _render_forecast_panel(pace_info: dict, unit_short: str,
+                            unit_decimals: int, field_label: str) -> None:
+    """Render the USDA Forecast pace tracker panel."""
+    if not pace_info or not pace_info.get("usda_total"):
+        return
+
+    pi       = pace_info
+    dec      = unit_decimals
+    fn       = lambda v: fmt_num(v, dec) if v is not None else "—"
+    has_ytd  = pi.get("has_ytd", False)
+    pace_pct = pi.get("pace_pct", 0.0)
+    pace_col = "#4caf50" if pace_pct >= 0 else "#ef5350"
+    pace_sign= "+" if pace_pct >= 0 else ""
+    adj_pct  = (pi.get("adj_factor", 1.0) - 1.0) * 100.0
+
+    st.markdown("---")
+    st.markdown(f"### 📈 Forecast — {field_label}")
+
+    cols = st.columns(5)
+    metrics = [
+        ("USDA MY Total",          fn(pi["usda_total"]),    unit_short, JSA_CYAN),
+        ("YTD Official",
+         fn(pi["ytd_actual"]) if has_ytd else "—",
+         unit_short if has_ytd else "",                      "#f9a825"),
+        ("YTD Seasonal Expected",
+         fn(pi["ytd_expected"]) if has_ytd else "—",
+         unit_short if has_ytd else "",                      "#78909c"),
+        ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, "#9c27b0"),
+        ("Model 2 — Pace Adjusted",
+         fn(pi["model2_total"]) if has_ytd else "—",
+         unit_short if has_ytd else "Need actuals",           "#00bcd4"),
+    ]
+
+    for col, (label, val, unit, accent) in zip(cols, metrics):
+        with col:
+            st.markdown(f"""
+            <div style="background:#1e2124;border-top:3px solid {accent};
+                        border-radius:6px;padding:12px 14px;text-align:center;">
+              <div style="font-size:11px;color:#8a9aaa;font-family:Arial;
+                          margin-bottom:4px;">{label}</div>
+              <div style="font-size:20px;font-weight:700;color:#ffffff;
+                          font-family:Arial;">{val}</div>
+              <div style="font-size:11px;color:{accent};font-family:Arial;
+                          margin-top:2px;">{unit}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Pace strip
+    if has_ytd:
+        m1_vs_usda = pi["model1_total"] - pi["usda_total"]
+        m2_vs_usda = pi["model2_total"] - pi["usda_total"]
+        m1_col = "#4caf50" if m1_vs_usda >= 0 else "#ef5350"
+        m2_col = "#4caf50" if m2_vs_usda >= 0 else "#ef5350"
+        m1_sign= "+" if m1_vs_usda >= 0 else ""
+        m2_sign= "+" if m2_vs_usda >= 0 else ""
+        st.markdown(f"""
+        <div style="background:{JSA_MID};padding:8px 16px;border-radius:5px;
+                    margin-top:10px;font-family:Arial;font-size:12px;
+                    display:flex;gap:28px;flex-wrap:wrap;color:#d0d8e0;">
+          <span>📊 <b style="color:#fff;">YTD Pace:</b>
+            <span style="color:{pace_col};font-weight:700;">
+              {pace_sign}{pace_pct:.1f}% vs seasonal baseline</span></span>
+          <span>🔵 <b style="color:#9c27b0;">Model 1</b> implies
+            <span style="color:{m1_col};font-weight:600;">
+              {m1_sign}{fn(m1_vs_usda)} {unit_short}</span>
+            vs USDA total</span>
+          <span>🩵 <b style="color:#00bcd4;">Model 2</b>
+            ({adj_pct:+.1f}% pace adj) implies
+            <span style="color:{m2_col};font-weight:600;">
+              {m2_sign}{fn(m2_vs_usda)} {unit_short}</span>
+            vs USDA total</span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style="background:{JSA_MID};padding:8px 16px;border-radius:5px;
+                    margin-top:10px;font-family:Arial;font-size:12px;color:#8a9aaa;">
+          ℹ️ Pace-Adjusted forecast (Model 2) will activate once official
+          shipment data is available for the current marketing year.
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # COMMODITY TAB RENDERER
 # ─────────────────────────────────────────────────────────────────────────────
 def _run_commodity_tab(commodity: str, use_bushels: bool,
@@ -1838,6 +2150,15 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     cy_est_months = _cy_estimate_months(field, cutoffs, months)
     has_estimates = bool(cy_est_months)
 
+    # ── Forecast models ───────────────────────────────────────────────────
+    forecast_cfg  = load_forecast_config()
+    _usda_raw     = forecast_cfg.get((commodity, field))
+    usda_total    = (_usda_raw * unit_factor) if (_usda_raw and use_bushels) else _usda_raw
+    shares        = _compute_seasonal_shares(monthly_pivot, complete_years, months)
+    model1_pivot, model2_pivot, pace_info = _build_forecast_pivots(
+        monthly_pivot, all_years, cy, months, shares, usda_total, cy_est_months
+    )
+
     # ── Info strip ────────────────────────────────────────────────────────
     is_import_field = field in cfg["import_fields"]
     flow_type = "Import" if is_import_field else "Export"
@@ -1886,6 +2207,12 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # ── Monthly / Cumulative tabs ─────────────────────────────────────────
     tab1, tab2 = st.tabs(["📊  Monthly Shipments", "📈  Cumulative Shipments"])
 
+    # Build cumulative forecast pivots
+    cum_model1 = (build_cumulative_pivot(model1_pivot, all_years, months)
+                  if model1_pivot else None)
+    cum_model2 = (build_cumulative_pivot(model2_pivot, all_years, months)
+                  if model2_pivot else None)
+
     with tab1:
         st.markdown(
             f"**Monthly — {field_label}** &nbsp;({unit_short}) &nbsp;|&nbsp; "
@@ -1903,7 +2230,12 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
                                 field_label, False, months,
                                 logo_white_b64, unit_short=unit_short,
-                                cy_est_months=cy_est_months),
+                                cy_est_months=cy_est_months,
+                                model1_pivot=model1_pivot,
+                                model2_pivot=model2_pivot,
+                                shares=shares,
+                                usda_total=usda_total,
+                                pace_info=pace_info),
             use_container_width=True,
         )
 
@@ -1924,9 +2256,17 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
                                 field_label, True, months,
                                 logo_white_b64, unit_short=unit_short,
-                                cy_est_months=cy_est_months),
+                                cy_est_months=cy_est_months,
+                                model1_pivot=cum_model1,
+                                model2_pivot=cum_model2,
+                                shares=None,          # no σ band on cumulative
+                                usda_total=usda_total,
+                                pace_info=pace_info),
             use_container_width=True,
         )
+
+    # ── Forecast Panel ────────────────────────────────────────────────────
+    _render_forecast_panel(pace_info, unit_short, unit_decimals, field_label)
 
     # ── Volume Comparison Column Chart ────────────────────────────────────
     st.markdown("---")
@@ -2322,6 +2662,15 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     cy_est_months   = _cy_estimate_months(field, cutoffs, months)
     has_estimates   = bool(cy_est_months)
 
+    # ── Forecast models ───────────────────────────────────────────────────
+    forecast_cfg  = load_forecast_config()
+    _usda_raw_w   = forecast_cfg.get(("wheat", field))
+    usda_total_w  = (_usda_raw_w * unit_factor) if (_usda_raw_w and use_bushels) else _usda_raw_w
+    shares_w      = _compute_seasonal_shares(monthly_pivot, complete_years, months)
+    model1_pivot_w, model2_pivot_w, pace_info_w = _build_forecast_pivots(
+        monthly_pivot, all_years, cy, months, shares_w, usda_total_w, cy_est_months
+    )
+
     # ── Info strip ───────────────────────────────────────────────────────
     st.markdown(f"""
     <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
@@ -2379,11 +2728,20 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                               cy_est_months=cy_est_months),
             unsafe_allow_html=True,
         )
+        cum_model1_w = (build_cumulative_pivot(model1_pivot_w, all_years, months)
+                        if model1_pivot_w else None)
+        cum_model2_w = (build_cumulative_pivot(model2_pivot_w, all_years, months)
+                        if model2_pivot_w else None)
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
                                 field_label, False, months,
                                 logo_white_b64, unit_short=unit_short,
-                                cy_est_months=cy_est_months),
+                                cy_est_months=cy_est_months,
+                                model1_pivot=model1_pivot_w,
+                                model2_pivot=model2_pivot_w,
+                                shares=shares_w,
+                                usda_total=usda_total_w,
+                                pace_info=pace_info_w),
             use_container_width=True,
         )
 
@@ -2404,9 +2762,17 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
                                 field_label, True, months,
                                 logo_white_b64, unit_short=unit_short,
-                                cy_est_months=cy_est_months),
+                                cy_est_months=cy_est_months,
+                                model1_pivot=cum_model1_w,
+                                model2_pivot=cum_model2_w,
+                                shares=None,
+                                usda_total=usda_total_w,
+                                pace_info=pace_info_w),
             use_container_width=True,
         )
+
+    # ── Forecast Panel ────────────────────────────────────────────────────
+    _render_forecast_panel(pace_info_w, unit_short, unit_decimals, field_label)
 
     # ── Volume Comparison ────────────────────────────────────────────────
     st.markdown("---")

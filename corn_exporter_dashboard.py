@@ -1026,13 +1026,22 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                     hovertemplate="%{x}: %{customdata}<extra>" + f"{cy} Estimate</extra>",
                 ))
 
-                # Vertical annotation at the boundary
-                fig.add_vline(
-                    x=months[boundary],
+                # Vertical annotation at the boundary (add_shape works with
+                # categorical x-axes; add_vline does not)
+                fig.add_shape(
+                    type="line",
+                    x0=months[boundary], x1=months[boundary],
+                    y0=0, y1=1,
+                    xref="x", yref="paper",
                     line=dict(color="#f9a825", width=1, dash="dot"),
-                    annotation_text="Est →",
-                    annotation_font=dict(color="#f9a825", size=10),
-                    annotation_position="top right",
+                )
+                fig.add_annotation(
+                    x=months[boundary], y=1.02,
+                    xref="x", yref="paper",
+                    text="Est →",
+                    font=dict(color="#f9a825", size=10),
+                    showarrow=False,
+                    xanchor="left", yanchor="bottom",
                 )
             else:
                 # All months are official — draw normal CY line

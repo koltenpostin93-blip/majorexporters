@@ -2248,28 +2248,36 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     """, unsafe_allow_html=True)
 
     # ── Legend ────────────────────────────────────────────────────────────
-    _est_legend = (
-        '<span><span class="est-badge">EST</span>'
-        '&nbsp;Estimate (not yet official)</span>'
+    # Use inline styles for EST badge — CSS class (.est-badge) lives inside
+    # _TABLE_CSS which is injected with the table, not available yet here.
+    _est_badge_style = (
+        "background:#7a5800;border:1px dashed #f9a825;padding:2px 8px;"
+        "border-radius:3px;color:#ffe082;font-weight:600;"
+    )
+    _est_legend_item = (
+        f'<span><span style="{_est_badge_style}">EST</span>'
+        f'&nbsp;Estimate (not yet official)</span>'
         if has_estimates else ""
     )
-    st.markdown(f"""
-    <div style="font-family:Arial;font-size:12px;color:#aab4c0;
-                margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;
-                padding:7px 14px;background:#252a2f;border-radius:5px;">
-        <span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;
-              color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>
-        {_est_legend}
-        <span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;
-              color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>
-        <span><span style="background:#c62828;padding:2px 8px;border-radius:3px;
-              color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>
-        <span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;
-              color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>
-        <span style="color:#4caf50;font-weight:600;">+x.x%</span>&nbsp;Above reference&nbsp;
-        <span style="color:#ef5350;font-weight:600;">-x.x%</span>&nbsp;Below reference
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-family:Arial;font-size:12px;color:#aab4c0;'
+        f'margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;'
+        f'padding:7px 14px;background:#252a2f;border-radius:5px;">'
+        f'<span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;'
+        f'color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>'
+        f'{_est_legend_item}'
+        f'<span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;'
+        f'color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>'
+        f'<span><span style="background:#c62828;padding:2px 8px;border-radius:3px;'
+        f'color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>'
+        f'<span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;'
+        f'color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>'
+        f'<span style="color:#4caf50;font-weight:600;">+x.x%</span>'
+        f'&nbsp;Above reference&nbsp;'
+        f'<span style="color:#ef5350;font-weight:600;">-x.x%</span>'
+        f'&nbsp;Below reference</div>',
+        unsafe_allow_html=True,
+    )
 
     # ── USDA Forecast input ───────────────────────────────────────────────
     # Default to saved Excel value (converted to display units if needed)
@@ -2806,28 +2814,34 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     """, unsafe_allow_html=True)
 
     # ── Legend ───────────────────────────────────────────────────────────
-    _est_legend_w = (
-        '<span><span class="est-badge">EST</span>'
-        '&nbsp;Estimate (not yet official)</span>'
+    _est_badge_style = (
+        "background:#7a5800;border:1px dashed #f9a825;padding:2px 8px;"
+        "border-radius:3px;color:#ffe082;font-weight:600;"
+    )
+    _est_legend_w_item = (
+        f'<span><span style="{_est_badge_style}">EST</span>'
+        f'&nbsp;Estimate (not yet official)</span>'
         if has_estimates else ""
     )
-    st.markdown(f"""
-    <div style="font-family:Arial;font-size:12px;color:#aab4c0;
-                margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;
-                padding:7px 14px;background:#252a2f;border-radius:5px;">
-        <span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;
-              color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>
-        {_est_legend_w}
-        <span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;
-              color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>
-        <span><span style="background:#c62828;padding:2px 8px;border-radius:3px;
-              color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>
-        <span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;
-              color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>
-        <span style="color:#4caf50;font-weight:600;">+x.x%</span>&nbsp;Above reference&nbsp;
-        <span style="color:#ef5350;font-weight:600;">-x.x%</span>&nbsp;Below reference
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-family:Arial;font-size:12px;color:#aab4c0;'
+        f'margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;'
+        f'padding:7px 14px;background:#252a2f;border-radius:5px;">'
+        f'<span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;'
+        f'color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>'
+        f'{_est_legend_w_item}'
+        f'<span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;'
+        f'color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>'
+        f'<span><span style="background:#c62828;padding:2px 8px;border-radius:3px;'
+        f'color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>'
+        f'<span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;'
+        f'color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>'
+        f'<span style="color:#4caf50;font-weight:600;">+x.x%</span>'
+        f'&nbsp;Above reference&nbsp;'
+        f'<span style="color:#ef5350;font-weight:600;">-x.x%</span>'
+        f'&nbsp;Below reference</div>',
+        unsafe_allow_html=True,
+    )
 
     # ── USDA Forecast input ───────────────────────────────────────────────
     _saved_disp_w = 0.0

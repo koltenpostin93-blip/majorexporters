@@ -618,20 +618,24 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
     """Build Model 1 (USDA Seasonal) and Model 2 (Pace-Adjusted) forecast pivots.
 
     Returns: (model1_pivot, model2_pivot, pace_info)
-      model1_pivot  – full pivot where CY forecast months = USDA × olympic share
+      model1_pivot  – full pivot where CY blank months = USDA × olympic share
       model2_pivot  – same but pace-adjusted (40% YTD deviation carried forward)
       pace_info     – dict of KPIs for the forecast panel
     """
     if not usda_total or not shares:
         return None, None, {}
 
-    # Months that have official actuals in CY (not estimate, not blank)
+    # Official = has data AND not an estimate
     official_months = {m for m in months
                        if monthly_pivot[m].get(cy) is not None
                        and m not in cy_est_months}
 
-    # Months with no CY data at all (pure forecast)
-    forecast_months = [m for m in months if monthly_pivot[m].get(cy) is None]
+    # Blank = no spreadsheet data at all (chart forecast line drawn here only)
+    blank_months = [m for m in months if monthly_pivot[m].get(cy) is None]
+
+    # All non-official = estimate + blank (used for implied-total calculation)
+    non_official_months = [m for m in months
+                           if m in cy_est_months or monthly_pivot[m].get(cy) is None]
 
     # YTD actual (official only) & YTD seasonal expected
     ytd_actual   = sum((monthly_pivot[m].get(cy) or 0) for m in official_months)
@@ -641,10 +645,10 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
     # Pace ratio: how far above/below the seasonal baseline we are YTD
     pace_ratio = (ytd_actual / ytd_expected) if ytd_expected > 0 else 1.0
 
-    # Model 1 — pure USDA seasonal
+    # Model 1 pivot — fill blank months with USDA seasonal value
     def _make_pivot(fcst_factor: float) -> dict:
         piv = {m: dict(monthly_pivot[m]) for m in months}
-        for m in forecast_months:
+        for m in blank_months:
             if m in shares:
                 piv[m][cy] = usda_total * shares[m]["olympic"] / 100.0 * fcst_factor
         return piv
@@ -656,15 +660,17 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
     model1_pivot = _make_pivot(1.0)
     model2_pivot = _make_pivot(adj_factor) if official_months else None
 
-    # Implied full-MY totals under each model
+    # Implied full-MY totals: official YTD + USDA seasonal for ALL non-official
+    # months (both estimate and blank).  This gives a meaningful comparison
+    # against the USDA total even when estimates fill the spreadsheet.
     m1_remaining = sum(usda_total * shares[m]["olympic"] / 100.0
-                       for m in forecast_months if m in shares)
+                       for m in non_official_months if m in shares)
     m2_remaining = m1_remaining * adj_factor if official_months else m1_remaining
 
-    # Uncertainty: ±1σ on the forecast portion
+    # Uncertainty: ±1σ on the non-official portion
     sigma_remaining = sum(
         (usda_total * shares[m]["std"] / 100.0) ** 2
-        for m in forecast_months if m in shares
+        for m in non_official_months if m in shares
     ) ** 0.5
 
     pace_info = {
@@ -678,7 +684,7 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
         "model1_total":    ytd_actual + m1_remaining,
         "model2_total":    ytd_actual + m2_remaining,
         "sigma_remaining": sigma_remaining,
-        "forecast_months": forecast_months,
+        "forecast_months": blank_months,   # chart line covers blank months only
     }
     return model1_pivot, model2_pivot, pace_info
 
@@ -1246,7 +1252,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=band_x + band_x[::-1],
                     y=band_hi + band_lo[::-1],
-                    fill="toself", fillcolor="rgba(156,39,176,0.13)",
+                    fill="toself", fillcolor="rgba(255,193,7,0.18)",
                     line=dict(color="rgba(0,0,0,0)"),
                     name="Forecast ±1σ",
                     hoverinfo="skip", showlegend=True, legendrank=950,

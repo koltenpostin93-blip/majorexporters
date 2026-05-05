@@ -496,6 +496,38 @@ def _enforce_aggregate_completeness(df: pd.DataFrame, cfg: dict) -> pd.DataFrame
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# OFFICIAL / ESTIMATE CONFIG
+# ─────────────────────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def load_cutoff_config() -> dict[str, str]:
+    """Read the Config sheet → {field: last_official_month}.
+    e.g. {"US": "Jan", "Brazil": "Mar"}  — empty string means all official.
+    Returns {} if Config sheet is missing or unreadable."""
+    try:
+        df = pd.read_excel(EXCEL_PATH, sheet_name="Config", header=0)
+        result = {}
+        for _, row in df.iterrows():
+            country = str(row.get("Country", "")).strip()
+            month   = str(row.get("Last_Official_Month", "")).strip()
+            if country and month:
+                result[country] = month
+        return result
+    except Exception:
+        return {}
+
+
+def _cy_estimate_months(field: str, cutoffs: dict[str, str],
+                        months_order: list[str]) -> set[str]:
+    """Return the set of months in months_order that are estimates in the
+    current marketing year for this field.  Empty set = all official."""
+    last_off = cutoffs.get(field, "")
+    if not last_off or last_off not in months_order:
+        return set()
+    cutoff_pos = months_order.index(last_off)
+    return set(months_order[cutoff_pos + 1:])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PIVOT BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 def build_pivot(df: pd.DataFrame, field: str) -> tuple[dict, list[str]]:
@@ -720,13 +752,24 @@ _TABLE_CSS = """
 .corn-tbl tr.total-row td.cy-cell { background: #0555a0 !important; color: #ffffff !important; }
 .corn-tbl tr.total-row td.s-cell  { background: #2a2f35 !important; color: #ffffff !important; }
 .corn-tbl tr.total-row td.p-cell  { background: #2a2f35 !important; }
+.corn-tbl td.est-cy-cell  { background: #7a5800 !important; color: #ffe082 !important;
+                             font-weight: 600 !important; border-top: 1px dashed #f9a825 !important;
+                             border-bottom: 1px dashed #f9a825 !important; }
+.corn-tbl tr.total-row td.est-cy-cell { background: #5a4000 !important; color: #ffe082 !important; }
 </style>
 """
 
 def render_table_html(data_pivot, stats, all_years, cy, ly, months,
-                      decimals: int = 0) -> str:
+                      decimals: int = 0,
+                      cy_est_months: set | None = None) -> str:
+    """Render the data table as HTML.
+
+    cy_est_months : set of month names in the current MY that are Estimates
+                    (past the official data cutoff).  None / empty = all official.
+    """
     fn = lambda v: fmt_num(v, decimals)
     W  = dict(month=65, stat=94, pct=112, year=90)
+    est_months = cy_est_months or set()
 
     def sticky_left(w):
         return f"position:sticky;left:0;min-width:{w}px;z-index:2;"
@@ -782,11 +825,16 @@ def render_table_html(data_pivot, stats, all_years, cy, ly, months,
         pc_ly  = s["pct_vs_ly"]
         pc_oly = s["pct_vs_oly"]
         cy_val = year_data.get(cy)
+
+        # CY cell gets estimate styling if this month (or TOTAL) is an estimate
+        is_est = (label in est_months) or (is_total and bool(est_months))
+        cy_cls = "est-cy-cell left-divider" if is_est else "cy-cell left-divider"
+
         for r_idx, w, cls, val_str, xtra in [
-            (5, W["year"], "cy-cell left-divider", fn(cy_val),       ""),
-            (4, W["stat"], "s-cell",               fn(s["oly_avg"]), ""),
-            (3, W["stat"], "s-cell",               fn(s["min"]),     ""),
-            (2, W["stat"], "s-cell",               fn(s["max"]),     ""),
+            (5, W["year"], cy_cls,   fn(cy_val),       ""),
+            (4, W["stat"], "s-cell", fn(s["oly_avg"]), ""),
+            (3, W["stat"], "s-cell", fn(s["min"]),     ""),
+            (2, W["stat"], "s-cell", fn(s["max"]),     ""),
             (1, W["pct"],  "p-cell", fmt_pct(pc_ly),  f"color:{pct_color(pc_ly)};"),
             (0, W["pct"],  "p-cell", fmt_pct(pc_oly), f"color:{pct_color(pc_oly)};"),
         ]:
@@ -846,12 +894,19 @@ def _year_style(year, cy, ly, all_years) -> tuple:
 
 def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                         field_label, is_cumulative, months,
-                        logo_b64=None, unit_short="TMT") -> go.Figure:
+                        logo_b64=None, unit_short="TMT",
+                        cy_est_months: set | None = None) -> go.Figure:
+    """Build the seasonal shipments chart.
+
+    cy_est_months : set of month names classified as Estimate in the current MY.
+                    When provided the CY trace is split into an Official segment
+                    (solid line) and an Estimate segment (dashed, amber tint).
+    """
     lbl = "Cumulative " if is_cumulative else ""
     dec = 1 if unit_short == "Mbu" else 0          # decimal places for volumes
-    vol_fmt = f",.{dec}f"                           # Plotly format string
     fig = go.Figure()
     ly  = complete_years[-1] if complete_years else None
+    est_months = cy_est_months or set()
 
     hist_8 = sorted(complete_years)[-8:]
     if len(hist_8) >= 2:
@@ -907,22 +962,90 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
         legend_rank[yr] = rank
 
     for year in draw_order:
-        vals  = [data_pivot[m].get(year) for m in months]
         color, width, opacity = _year_style(year, cy, ly, all_years)
         is_key = year in (cy, ly)
-        yr_hover = [
-            f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
-            for v in vals
-        ]
-        fig.add_trace(go.Scatter(
-            x=months, y=vals, mode="lines+markers", name=year,
-            line=dict(color=color, width=width),
-            marker=dict(size=5 if is_key else 3, color=color),
-            opacity=opacity, connectgaps=False,
-            legendrank=legend_rank.get(year, 500),
-            customdata=yr_hover,
-            hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
-        ))
+
+        if year == cy and est_months:
+            # ── CY: split into Official (solid) + Estimate (dashed) segments ──
+            # Find the boundary index: first month in est_months
+            boundary = None
+            for idx, m in enumerate(months):
+                if m in est_months:
+                    boundary = idx
+                    break
+
+            # Official segment: months[0..boundary] inclusive of the boundary
+            # so the line connects cleanly.  We include the boundary month
+            # with its value in the official trace (it's the last known point).
+            if boundary is not None:
+                # Official portion — ends at the last official month
+                off_months = months[:boundary]
+                off_vals   = [data_pivot[m].get(cy) for m in off_months]
+                off_hover  = [f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+                              for v in off_vals]
+                if off_months:
+                    fig.add_trace(go.Scatter(
+                        x=off_months, y=off_vals,
+                        mode="lines+markers", name=f"{cy} (Official)",
+                        line=dict(color=color, width=width),
+                        marker=dict(size=5, color=color),
+                        opacity=opacity, connectgaps=False,
+                        legendrank=1,
+                        customdata=off_hover,
+                        hovertemplate="%{x}: %{customdata}<extra>" + f"{cy} Official</extra>",
+                    ))
+
+                # Estimate portion — starts one month before boundary to connect
+                est_months_seq = months[max(boundary - 1, 0):]
+                est_vals = [data_pivot[m].get(cy) for m in est_months_seq]
+                est_hover = [f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+                             for v in est_vals]
+                fig.add_trace(go.Scatter(
+                    x=est_months_seq, y=est_vals,
+                    mode="lines+markers", name=f"{cy} (Estimate)",
+                    line=dict(color="#f9a825", width=width, dash="dash"),
+                    marker=dict(size=5, color="#f9a825", symbol="diamond"),
+                    opacity=opacity, connectgaps=False,
+                    legendrank=2,
+                    customdata=est_hover,
+                    hovertemplate="%{x}: %{customdata}<extra>" + f"{cy} Estimate</extra>",
+                ))
+
+                # Vertical annotation at the boundary
+                fig.add_vline(
+                    x=months[boundary],
+                    line=dict(color="#f9a825", width=1, dash="dot"),
+                    annotation_text="Est →",
+                    annotation_font=dict(color="#f9a825", size=10),
+                    annotation_position="top right",
+                )
+            else:
+                # All months are official — draw normal CY line
+                vals     = [data_pivot[m].get(cy) for m in months]
+                yr_hover = [f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+                            for v in vals]
+                fig.add_trace(go.Scatter(
+                    x=months, y=vals, mode="lines+markers", name=cy,
+                    line=dict(color=color, width=width),
+                    marker=dict(size=5, color=color),
+                    opacity=opacity, connectgaps=False,
+                    legendrank=1,
+                    customdata=yr_hover,
+                    hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
+                ))
+        else:
+            vals     = [data_pivot[m].get(year) for m in months]
+            yr_hover = [f"{v:,.{dec}f} {unit_short}" if v is not None else "—"
+                        for v in vals]
+            fig.add_trace(go.Scatter(
+                x=months, y=vals, mode="lines+markers", name=year,
+                line=dict(color=color, width=width),
+                marker=dict(size=5 if is_key else 3, color=color),
+                opacity=opacity, connectgaps=False,
+                legendrank=legend_rank.get(year, 500),
+                customdata=yr_hover,
+                hovertemplate="%{x}: %{customdata}<extra>%{fullData.name}</extra>",
+            ))
 
     fig.update_layout(**_base_layout(
         f"Seasonal {lbl}Shipments — {field_label} ({unit_short})",
@@ -1680,6 +1803,11 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     cum_stats     = compute_stats(cum_pivot, all_years, complete_years,
                                   cy, ly, months, is_cumulative=True)
 
+    # ── Official / Estimate classification ───────────────────────────────
+    cutoffs       = load_cutoff_config()
+    cy_est_months = _cy_estimate_months(field, cutoffs, months)
+    has_estimates = bool(cy_est_months)
+
     # ── Info strip ────────────────────────────────────────────────────────
     is_import_field = field in cfg["import_fields"]
     flow_type = "Import" if is_import_field else "Export"
@@ -1702,12 +1830,19 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     """, unsafe_allow_html=True)
 
     # ── Legend ────────────────────────────────────────────────────────────
+    _est_legend = (
+        "<span><span style='background:#7a5800;border:1px dashed #f9a825;"
+        "padding:2px 8px;border-radius:3px;color:#ffe082;font-weight:600;'>"
+        "EST</span>&nbsp;Estimate (not yet official)</span>"
+        if has_estimates else ""
+    )
     st.markdown(f"""
     <div style="font-family:Arial;font-size:12px;color:#aab4c0;
                 margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;
                 padding:7px 14px;background:#252a2f;border-radius:5px;">
         <span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;
               color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>
+        {_est_legend}
         <span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;
               color:#fff;">■</span>&nbsp;2 Highest (prior yrs)</span>
         <span><span style="background:#c62828;padding:2px 8px;border-radius:3px;
@@ -1731,13 +1866,15 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         )
         st.markdown(
             render_table_html(monthly_pivot, monthly_stats, all_years,
-                              cy, ly, months, decimals=unit_decimals),
+                              cy, ly, months, decimals=unit_decimals,
+                              cy_est_months=cy_est_months),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
                                 field_label, False, months,
-                                logo_white_b64, unit_short=unit_short),
+                                logo_white_b64, unit_short=unit_short,
+                                cy_est_months=cy_est_months),
             use_container_width=True,
         )
 
@@ -1750,13 +1887,15 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         )
         st.markdown(
             render_table_html(cum_pivot, cum_stats, all_years,
-                              cy, ly, months, decimals=unit_decimals),
+                              cy, ly, months, decimals=unit_decimals,
+                              cy_est_months=cy_est_months),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
                                 field_label, True, months,
-                                logo_white_b64, unit_short=unit_short),
+                                logo_white_b64, unit_short=unit_short,
+                                cy_est_months=cy_est_months),
             use_container_width=True,
         )
 
@@ -2149,6 +2288,11 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     cum_stats     = compute_stats(cum_pivot, all_years, complete_years,
                                   cy, ly, months, is_cumulative=True)
 
+    # ── Official / Estimate classification ───────────────────────────────
+    cutoffs         = load_cutoff_config()
+    cy_est_months   = _cy_estimate_months(field, cutoffs, months)
+    has_estimates   = bool(cy_est_months)
+
     # ── Info strip ───────────────────────────────────────────────────────
     st.markdown(f"""
     <div style="background:{JSA_MID};padding:9px 18px;border-radius:6px;
@@ -2167,12 +2311,19 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     """, unsafe_allow_html=True)
 
     # ── Legend ───────────────────────────────────────────────────────────
+    _est_legend_w = (
+        "<span><span style='background:#7a5800;border:1px dashed #f9a825;"
+        "padding:2px 8px;border-radius:3px;color:#ffe082;font-weight:600;'>"
+        "EST</span>&nbsp;Estimate (not yet official)</span>"
+        if has_estimates else ""
+    )
     st.markdown(f"""
     <div style="font-family:Arial;font-size:12px;color:#aab4c0;
                 margin:6px 0 14px 0;display:flex;gap:20px;flex-wrap:wrap;
                 padding:7px 14px;background:#252a2f;border-radius:5px;">
         <span><span style="background:{JSA_CYAN};padding:2px 8px;border-radius:3px;
               color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>
+        {_est_legend_w}
         <span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;
               color:#fff;">■</span>&nbsp;2 Highest (prior yrs)</span>
         <span><span style="background:#c62828;padding:2px 8px;border-radius:3px;
@@ -2196,13 +2347,15 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         )
         st.markdown(
             render_table_html(monthly_pivot, monthly_stats, all_years,
-                              cy, ly, months, decimals=unit_decimals),
+                              cy, ly, months, decimals=unit_decimals,
+                              cy_est_months=cy_est_months),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
                                 field_label, False, months,
-                                logo_white_b64, unit_short=unit_short),
+                                logo_white_b64, unit_short=unit_short,
+                                cy_est_months=cy_est_months),
             use_container_width=True,
         )
 
@@ -2215,13 +2368,15 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         )
         st.markdown(
             render_table_html(cum_pivot, cum_stats, all_years,
-                              cy, ly, months, decimals=unit_decimals),
+                              cy, ly, months, decimals=unit_decimals,
+                              cy_est_months=cy_est_months),
             unsafe_allow_html=True,
         )
         st.plotly_chart(
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
                                 field_label, True, months,
-                                logo_white_b64, unit_short=unit_short),
+                                logo_white_b64, unit_short=unit_short,
+                                cy_est_months=cy_est_months),
             use_container_width=True,
         )
 

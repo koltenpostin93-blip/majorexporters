@@ -498,10 +498,20 @@ def _enforce_aggregate_completeness(df: pd.DataFrame, cfg: dict) -> pd.DataFrame
 # ─────────────────────────────────────────────────────────────────────────────
 # OFFICIAL / ESTIMATE CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
+_FULL_MONTH_TO_ABB = {
+    "january":"Jan","february":"Feb","march":"Mar","april":"Apr",
+    "may":"May","june":"Jun","july":"Jul","august":"Aug",
+    "september":"Sep","october":"Oct","november":"Nov","december":"Dec",
+    # already-abbreviated pass-through
+    "jan":"Jan","feb":"Feb","mar":"Mar","apr":"Apr",
+    "jun":"Jun","jul":"Jul","aug":"Aug",
+    "sep":"Sep","oct":"Oct","nov":"Nov","dec":"Dec",
+}
+
 @st.cache_data(show_spinner=False)
 def load_cutoff_config() -> dict[str, str]:
-    """Read the Config sheet → {field: last_official_month}.
-    e.g. {"US": "Jan", "Brazil": "Mar"}  — empty string means all official.
+    """Read the Config sheet → {field: last_official_month (3-letter abbrev)}.
+    Accepts full month names ('March') or abbreviations ('Mar').
     Returns {} if Config sheet is missing or unreadable."""
     try:
         df = pd.read_excel(EXCEL_PATH, sheet_name="Config", header=0)
@@ -509,8 +519,11 @@ def load_cutoff_config() -> dict[str, str]:
         for _, row in df.iterrows():
             country = str(row.get("Country", "")).strip()
             month   = str(row.get("Last_Official_Month", "")).strip()
-            if country and month:
-                result[country] = month
+            if not country or not month or month.lower() in ("", "nan"):
+                continue
+            # Normalise to 3-letter abbreviation
+            abb = _FULL_MONTH_TO_ABB.get(month.lower(), month[:3].capitalize())
+            result[country] = abb
         return result
     except Exception:
         return {}
@@ -756,6 +769,8 @@ _TABLE_CSS = """
                              font-weight: 600 !important; border-top: 1px dashed #f9a825 !important;
                              border-bottom: 1px dashed #f9a825 !important; }
 .corn-tbl tr.total-row td.est-cy-cell { background: #5a4000 !important; color: #ffe082 !important; }
+.est-badge { background:#7a5800; border:1px dashed #f9a825; padding:2px 8px;
+             border-radius:3px; color:#ffe082; font-weight:600; }
 </style>
 """
 
@@ -1831,9 +1846,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
     # ── Legend ────────────────────────────────────────────────────────────
     _est_legend = (
-        "<span><span style='background:#7a5800;border:1px dashed #f9a825;"
-        "padding:2px 8px;border-radius:3px;color:#ffe082;font-weight:600;'>"
-        "EST</span>&nbsp;Estimate (not yet official)</span>"
+        '<span><span class="est-badge">EST</span>'
+        '&nbsp;Estimate (not yet official)</span>'
         if has_estimates else ""
     )
     st.markdown(f"""
@@ -1844,11 +1858,11 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
               color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>
         {_est_legend}
         <span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;
-              color:#fff;">■</span>&nbsp;2 Highest (prior yrs)</span>
+              color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>
         <span><span style="background:#c62828;padding:2px 8px;border-radius:3px;
-              color:#fff;">■</span>&nbsp;2 Lowest (prior yrs)</span>
+              color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>
         <span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;
-              color:#000;">■</span>&nbsp;Stat Columns (prior yrs only)</span>
+              color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>
         <span style="color:#4caf50;font-weight:600;">+x.x%</span>&nbsp;Above reference&nbsp;
         <span style="color:#ef5350;font-weight:600;">-x.x%</span>&nbsp;Below reference
     </div>
@@ -2312,9 +2326,8 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 
     # ── Legend ───────────────────────────────────────────────────────────
     _est_legend_w = (
-        "<span><span style='background:#7a5800;border:1px dashed #f9a825;"
-        "padding:2px 8px;border-radius:3px;color:#ffe082;font-weight:600;'>"
-        "EST</span>&nbsp;Estimate (not yet official)</span>"
+        '<span><span class="est-badge">EST</span>'
+        '&nbsp;Estimate (not yet official)</span>'
         if has_estimates else ""
     )
     st.markdown(f"""
@@ -2325,11 +2338,11 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
               color:#fff;font-weight:600;">CY</span>&nbsp;Current Year ({cy})</span>
         {_est_legend_w}
         <span><span style="background:#2e7d32;padding:2px 8px;border-radius:3px;
-              color:#fff;">■</span>&nbsp;2 Highest (prior yrs)</span>
+              color:#fff;">&#9632;</span>&nbsp;2 Highest (prior yrs)</span>
         <span><span style="background:#c62828;padding:2px 8px;border-radius:3px;
-              color:#fff;">■</span>&nbsp;2 Lowest (prior yrs)</span>
+              color:#fff;">&#9632;</span>&nbsp;2 Lowest (prior yrs)</span>
         <span><span style="background:#f4f6f8;padding:2px 8px;border-radius:3px;
-              color:#000;">■</span>&nbsp;Stat Columns (prior yrs only)</span>
+              color:#000;">&#9632;</span>&nbsp;Stat Columns (prior yrs only)</span>
         <span style="color:#4caf50;font-weight:600;">+x.x%</span>&nbsp;Above reference&nbsp;
         <span style="color:#ef5350;font-weight:600;">-x.x%</span>&nbsp;Below reference
     </div>

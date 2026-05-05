@@ -2150,14 +2150,10 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     cy_est_months = _cy_estimate_months(field, cutoffs, months)
     has_estimates = bool(cy_est_months)
 
-    # ── Forecast models ───────────────────────────────────────────────────
+    # ── Forecast seasonal shares (computed from history, no input needed) ───
     forecast_cfg  = load_forecast_config()
-    _usda_raw     = forecast_cfg.get((commodity, field))
-    usda_total    = (_usda_raw * unit_factor) if (_usda_raw and use_bushels) else _usda_raw
+    _usda_saved   = forecast_cfg.get((commodity, field))   # Excel default, may be None
     shares        = _compute_seasonal_shares(monthly_pivot, complete_years, months)
-    model1_pivot, model2_pivot, pace_info = _build_forecast_pivots(
-        monthly_pivot, all_years, cy, months, shares, usda_total, cy_est_months
-    )
 
     # ── Info strip ────────────────────────────────────────────────────────
     is_import_field = field in cfg["import_fields"]
@@ -2203,6 +2199,49 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         <span style="color:#ef5350;font-weight:600;">-x.x%</span>&nbsp;Below reference
     </div>
     """, unsafe_allow_html=True)
+
+    # ── USDA Forecast input ───────────────────────────────────────────────
+    # Default to saved Excel value (converted to display units if needed)
+    _saved_display = 0.0
+    if _usda_saved:
+        _saved_display = float(_usda_saved) * unit_factor if use_bushels else float(_usda_saved)
+
+    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(_saved_display)):
+        _fc1, _fc2 = st.columns([2, 3])
+        with _fc1:
+            usda_input = st.number_input(
+                f"USDA {cy} MY Total ({unit_short})",
+                min_value=0.0,
+                value=_saved_display,
+                step=500.0,
+                format="%.0f",
+                key=f"{pfx}_{field}_usda_input",
+                help=(
+                    f"Enter the USDA WASDE marketing year total for {field_label} "
+                    f"in {unit_short}. This drives the Seasonal and Pace-Adjusted "
+                    f"forecast lines on the chart below."
+                ),
+            )
+        with _fc2:
+            st.markdown(
+                f"""<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">
+                <b style="color:#9c27b0;">●</b> Dotted purple line = <b>USDA Seasonal</b>
+                — distributes your total via historical monthly share %<br>
+                <b style="color:#00bcd4;">●</b> Teal dash-dot line = <b>Pace-Adjusted</b>
+                — shifts forecast based on YTD pace vs seasonal baseline
+                (activates once official data exists)<br>
+                <b style="color:#9c27b0; opacity:0.5;">▓</b> Shaded band =
+                <b>±1σ uncertainty</b> from historical variance in seasonal shares
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+    usda_total = usda_input if usda_input > 0 else None
+
+    # Build forecast pivots from the live UI value
+    model1_pivot, model2_pivot, pace_info = _build_forecast_pivots(
+        monthly_pivot, all_years, cy, months, shares, usda_total, cy_est_months
+    )
 
     # ── Monthly / Cumulative tabs ─────────────────────────────────────────
     tab1, tab2 = st.tabs(["📊  Monthly Shipments", "📈  Cumulative Shipments"])
@@ -2662,14 +2701,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     cy_est_months   = _cy_estimate_months(field, cutoffs, months)
     has_estimates   = bool(cy_est_months)
 
-    # ── Forecast models ───────────────────────────────────────────────────
+    # ── Forecast seasonal shares ──────────────────────────────────────────
     forecast_cfg  = load_forecast_config()
-    _usda_raw_w   = forecast_cfg.get(("wheat", field))
-    usda_total_w  = (_usda_raw_w * unit_factor) if (_usda_raw_w and use_bushels) else _usda_raw_w
+    _usda_saved_w = forecast_cfg.get(("wheat", field))
     shares_w      = _compute_seasonal_shares(monthly_pivot, complete_years, months)
-    model1_pivot_w, model2_pivot_w, pace_info_w = _build_forecast_pivots(
-        monthly_pivot, all_years, cy, months, shares_w, usda_total_w, cy_est_months
-    )
 
     # ── Info strip ───────────────────────────────────────────────────────
     st.markdown(f"""
@@ -2711,6 +2746,43 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         <span style="color:#ef5350;font-weight:600;">-x.x%</span>&nbsp;Below reference
     </div>
     """, unsafe_allow_html=True)
+
+    # ── USDA Forecast input ───────────────────────────────────────────────
+    _saved_disp_w = 0.0
+    if _usda_saved_w:
+        _saved_disp_w = float(_usda_saved_w) * unit_factor if use_bushels else float(_usda_saved_w)
+
+    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(_saved_disp_w)):
+        _fw1, _fw2 = st.columns([2, 3])
+        with _fw1:
+            usda_input_w = st.number_input(
+                f"USDA {cy} MY Total ({unit_short})",
+                min_value=0.0,
+                value=_saved_disp_w,
+                step=500.0,
+                format="%.0f",
+                key=f"wheat_{field}_usda_input",
+                help=(
+                    f"Enter the USDA WASDE marketing year total for {field_label} "
+                    f"in {unit_short}."
+                ),
+            )
+        with _fw2:
+            st.markdown(
+                f"""<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">
+                <b style="color:#9c27b0;">●</b> Dotted purple = <b>USDA Seasonal</b> forecast<br>
+                <b style="color:#00bcd4;">●</b> Teal dash-dot = <b>Pace-Adjusted</b>
+                (activates once official data exists)<br>
+                <b style="color:#9c27b0; opacity:0.5;">▓</b> Shaded band = ±1σ uncertainty
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+    usda_total_w = usda_input_w if usda_input_w > 0 else None
+
+    model1_pivot_w, model2_pivot_w, pace_info_w = _build_forecast_pivots(
+        monthly_pivot, all_years, cy, months, shares_w, usda_total_w, cy_est_months
+    )
 
     # ── Monthly / Cumulative tabs ─────────────────────────────────────────
     tab1, tab2 = st.tabs(["📊  Monthly Shipments", "📈  Cumulative Shipments"])

@@ -920,16 +920,16 @@ _TABLE_CSS = """
 .corn-tbl tr.total-row td.est-cy-cell { background: #5a4000 !important; color: #ffe082 !important; }
 .est-badge { background:#7a5800; border:1px dashed #f9a825; padding:2px 8px;
              border-radius:3px; color:#ffe082; font-weight:600; }
-.corn-tbl th.m1-hdr { background: #3d0a5a !important; color: #ce93d8 !important; }
-.corn-tbl th.m2-hdr { background: #00363d !important; color: #80deea !important; }
-.corn-tbl td.m1-cell { background: #3d0a5a !important; color: #ce93d8 !important;
-                        font-weight: 600 !important; border-top: 1px dotted #9c27b0 !important;
-                        border-bottom: 1px dotted #9c27b0 !important; }
-.corn-tbl td.m2-cell { background: #00363d !important; color: #80deea !important;
-                        font-weight: 600 !important; border-top: 1px dashed #00bcd4 !important;
-                        border-bottom: 1px dashed #00bcd4 !important; }
-.corn-tbl tr.total-row td.m1-cell { background: #2a0040 !important; color: #ce93d8 !important; }
-.corn-tbl tr.total-row td.m2-cell { background: #002a30 !important; color: #80deea !important; }
+.corn-tbl th.m1-hdr { background: #3d3100 !important; color: #fdd835 !important; }
+.corn-tbl th.m2-hdr { background: #003d1a !important; color: #00e676 !important; }
+.corn-tbl td.m1-cell { background: #3d3100 !important; color: #fdd835 !important;
+                        font-weight: 600 !important; border-top: 1px dotted #fdd835 !important;
+                        border-bottom: 1px dotted #fdd835 !important; }
+.corn-tbl td.m2-cell { background: #003d1a !important; color: #00e676 !important;
+                        font-weight: 600 !important; border-top: 1px dashed #00e676 !important;
+                        border-bottom: 1px dashed #00e676 !important; }
+.corn-tbl tr.total-row td.m1-cell { background: #2a2200 !important; color: #fdd835 !important; }
+.corn-tbl tr.total-row td.m2-cell { background: #002a10 !important; color: #00e676 !important; }
 .corn-tbl td.m-dash { background: #1e2124 !important; color: #4a5568 !important; }
 </style>
 """
@@ -1336,9 +1336,9 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             fig.add_trace(go.Scatter(
                 x=m1_x, y=m1_y, mode="lines+markers",
                 name="Forecast — USDA Seasonal",
-                line=dict(color="#9c27b0", width=2.5, dash="dot"),
-                marker=dict(symbol="diamond-open", size=7, color="#9c27b0",
-                            line=dict(width=2, color="#9c27b0")),
+                line=dict(color="#fdd835", width=2.5, dash="dot"),
+                marker=dict(symbol="diamond-open", size=7, color="#fdd835",
+                            line=dict(width=2, color="#fdd835")),
                 connectgaps=True, legendrank=5,
                 customdata=m1_hover,
                 hovertemplate="%{x}: %{customdata}<extra>USDA Seasonal Fcst</extra>",
@@ -1360,9 +1360,9 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                 fig.add_trace(go.Scatter(
                     x=m2_x, y=m2_y, mode="lines+markers",
                     name=f"Forecast — Pace Adj ({adj_lbl})",
-                    line=dict(color="#00bcd4", width=2.0, dash="dashdot"),
-                    marker=dict(symbol="triangle-up-open", size=7, color="#00bcd4",
-                                line=dict(width=2, color="#00bcd4")),
+                    line=dict(color="#00e676", width=2.0, dash="dashdot"),
+                    marker=dict(symbol="triangle-up-open", size=7, color="#00e676",
+                                line=dict(width=2, color="#00e676")),
                     connectgaps=True, legendrank=6,
                     customdata=m2_hover,
                     hovertemplate="%{x}: %{customdata}<extra>Pace-Adj Fcst</extra>",
@@ -1960,10 +1960,10 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
         ("YTD Seasonal Expected",
          fn(pi["ytd_expected"]) if has_ytd else "—",
          unit_short if has_ytd else "",                      "#78909c"),
-        ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, "#9c27b0"),
+        ("Model 1 — USDA Seasonal",fn(pi["model1_total"]), unit_short, "#fdd835"),
         ("Model 2 — Pace Adjusted",
          fn(pi["model2_total"]) if has_ytd else "—",
-         unit_short if has_ytd else "Need actuals",           "#00bcd4"),
+         unit_short if has_ytd else "Need actuals",           "#00e676"),
     ]
 
     for col, (label, val, unit, accent) in zip(cols, metrics):
@@ -1995,11 +1995,11 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
           <span>📊 <b style="color:#fff;">YTD Pace:</b>
             <span style="color:{pace_col};font-weight:700;">
               {pace_sign}{pace_pct:.1f}% vs seasonal baseline</span></span>
-          <span>🔵 <b style="color:#9c27b0;">Model 1</b> implies
+          <span>🟡 <b style="color:#fdd835;">Model 1</b> implies
             <span style="color:{m1_col};font-weight:600;">
               {m1_sign}{fn(m1_vs_usda)} {unit_short}</span>
             vs USDA total</span>
-          <span>🩵 <b style="color:#00bcd4;">Model 2</b>
+          <span>🟢 <b style="color:#00e676;">Model 2</b>
             ({adj_pct:+.1f}% pace adj) implies
             <span style="color:{m2_col};font-weight:600;">
               {m2_sign}{fn(m2_vs_usda)} {unit_short}</span>
@@ -2560,12 +2560,12 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         with _fc2:
             st.markdown(
                 f"""<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">
-                <b style="color:#9c27b0;">●</b> Dotted purple line = <b>USDA Seasonal</b>
+                <b style="color:#fdd835;">●</b> Dotted yellow line = <b>USDA Seasonal</b>
                 — distributes your total via historical monthly share %<br>
-                <b style="color:#00bcd4;">●</b> Teal dash-dot line = <b>Pace-Adjusted</b>
+                <b style="color:#00e676;">●</b> Green dash-dot line = <b>Pace-Adjusted</b>
                 — shifts forecast based on YTD pace vs seasonal baseline
                 (activates once official data exists)<br>
-                <b style="color:#9c27b0; opacity:0.5;">▓</b> Shaded band =
+                <b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band =
                 <b>±0.5σ likely range</b> from historical variance in seasonal shares
                 </div>""",
                 unsafe_allow_html=True,
@@ -3127,10 +3127,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         with _fw2:
             st.markdown(
                 f"""<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">
-                <b style="color:#9c27b0;">●</b> Dotted purple = <b>USDA Seasonal</b> forecast<br>
-                <b style="color:#00bcd4;">●</b> Teal dash-dot = <b>Pace-Adjusted</b>
+                <b style="color:#fdd835;">●</b> Dotted yellow = <b>USDA Seasonal</b> forecast<br>
+                <b style="color:#00e676;">●</b> Green dash-dot = <b>Pace-Adjusted</b>
                 (activates once official data exists)<br>
-                <b style="color:#9c27b0; opacity:0.5;">▓</b> Shaded band = ±1σ uncertainty
+                <b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band = ±0.5σ likely range
                 </div>""",
                 unsafe_allow_html=True,
             )

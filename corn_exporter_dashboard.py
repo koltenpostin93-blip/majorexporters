@@ -618,9 +618,17 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
     """Build Model 1 (USDA Seasonal) and Model 2 (Pace-Adjusted) forecast pivots.
 
     Returns: (model1_pivot, model2_pivot, pace_info)
-      model1_pivot  – full pivot where CY blank months = USDA × olympic share
-      model2_pivot  – same but pace-adjusted (40% YTD deviation carried forward)
+      model1_pivot  – full pivot, CY non-official months filled so implied total = USDA total
+      model2_pivot  – same but implied total = USDA × pace-adjustment factor
       pace_info     – dict of KPIs for the forecast panel
+
+    Budget-constrained logic:
+      Model 1: remaining_budget = usda_total − ytd_actual
+               Each non-official month gets remaining_budget × (its_share / Σ remaining_shares)
+               → implied total always equals usda_total exactly.
+      Model 2: model2_target = usda_total × adj_factor  (40 % of YTD pace deviation)
+               remaining_budget_m2 = model2_target − ytd_actual
+               Same proportional distribution → implied total = model2_target.
     """
     if not usda_total or not shares:
         return None, None, {}
@@ -630,10 +638,7 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
                        if monthly_pivot[m].get(cy) is not None
                        and m not in cy_est_months}
 
-    # Blank = no spreadsheet data at all (chart forecast line drawn here only)
-    blank_months = [m for m in months if monthly_pivot[m].get(cy) is None]
-
-    # All non-official = estimate + blank (used for implied-total calculation)
+    # All non-official = estimate + blank (forecast line + model fill)
     non_official_months = [m for m in months
                            if m in cy_est_months or monthly_pivot[m].get(cy) is None]
 
@@ -645,33 +650,39 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
     # Pace ratio: how far above/below the seasonal baseline we are YTD
     pace_ratio = (ytd_actual / ytd_expected) if ytd_expected > 0 else 1.0
 
-    # Model 1 pivot — fill non-official months (estimate + blank) with USDA seasonal value
-    def _make_pivot(fcst_factor: float) -> dict:
+    # Remaining share denominator (for proportional allocation)
+    remaining_share_sum = sum(shares[m]["olympic"]
+                               for m in non_official_months if m in shares)
+
+    # Model 2 target = USDA × pace-adjustment (40 % persistence)
+    PERSISTENCE   = 0.40
+    adj_factor    = 1.0 + PERSISTENCE * (pace_ratio - 1.0)
+    model2_target = usda_total * adj_factor
+
+    # Budget-constrained pivot builder
+    def _make_pivot(remaining_budget: float) -> dict:
         piv = {m: dict(monthly_pivot[m]) for m in months}
-        for m in non_official_months:
-            if m in shares:
-                piv[m][cy] = usda_total * shares[m]["olympic"] / 100.0 * fcst_factor
+        if remaining_share_sum > 0:
+            for m in non_official_months:
+                if m in shares:
+                    piv[m][cy] = (remaining_budget
+                                  * shares[m]["olympic"] / remaining_share_sum)
         return piv
 
-    # Model 2 — 40 % of YTD pace deviation carried into remaining months
-    PERSISTENCE = 0.40
-    adj_factor  = 1.0 + PERSISTENCE * (pace_ratio - 1.0)
+    m1_remaining_budget = usda_total    - ytd_actual
+    m2_remaining_budget = model2_target - ytd_actual
 
-    model1_pivot = _make_pivot(1.0)
-    model2_pivot = _make_pivot(adj_factor) if official_months else None
+    model1_pivot = _make_pivot(m1_remaining_budget)
+    model2_pivot = _make_pivot(m2_remaining_budget) if official_months else None
 
-    # Implied full-MY totals: official YTD + USDA seasonal for ALL non-official
-    # months (both estimate and blank).  This gives a meaningful comparison
-    # against the USDA total even when estimates fill the spreadsheet.
-    m1_remaining = sum(usda_total * shares[m]["olympic"] / 100.0
-                       for m in non_official_months if m in shares)
-    m2_remaining = m1_remaining * adj_factor if official_months else m1_remaining
-
-    # Uncertainty: ±1σ on the non-official portion
-    sigma_remaining = sum(
-        (usda_total * shares[m]["std"] / 100.0) ** 2
-        for m in non_official_months if m in shares
-    ) ** 0.5
+    # Uncertainty: ±1σ on the non-official portion, scaled to remaining budget
+    sigma_remaining = (
+        sum(
+            (m1_remaining_budget * shares[m]["std"] / remaining_share_sum) ** 2
+            for m in non_official_months if m in shares
+        ) ** 0.5
+        if remaining_share_sum > 0 else 0.0
+    )
 
     pace_info = {
         "usda_total":      usda_total,
@@ -681,10 +692,10 @@ def _build_forecast_pivots(monthly_pivot: dict, all_years: list, cy: str,
         "pace_pct":        (pace_ratio - 1.0) * 100.0,
         "has_ytd":         bool(official_months),
         "adj_factor":      adj_factor,
-        "model1_total":    ytd_actual + m1_remaining,
-        "model2_total":    ytd_actual + m2_remaining,
+        "model1_total":    usda_total,        # always pins to USDA total
+        "model2_total":    model2_target,     # pace-adjusted total
         "sigma_remaining": sigma_remaining,
-        "forecast_months": non_official_months,   # chart covers estimate + blank months
+        "forecast_months": non_official_months,
     }
     return model1_pivot, model2_pivot, pace_info
 
@@ -2473,9 +2484,12 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     has_estimates = bool(cy_est_months)
 
     # ── Forecast seasonal shares (computed from history, no input needed) ───
-    forecast_cfg  = load_forecast_config()
-    _usda_saved   = forecast_cfg.get((commodity, field))   # Excel default, may be None
-    shares        = _compute_seasonal_shares(monthly_pivot, complete_years, months)
+    # Use only the most recent 5 complete years so share distributions reflect
+    # current competitive dynamics rather than older export patterns.
+    forecast_cfg    = load_forecast_config()
+    _usda_saved     = forecast_cfg.get((commodity, field))   # Excel default, may be None
+    _share_years    = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
+    shares          = _compute_seasonal_shares(monthly_pivot, _share_years, months)
 
     # ── Info strip ────────────────────────────────────────────────────────
     is_import_field = field in cfg["import_fields"]
@@ -3051,9 +3065,11 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     has_estimates   = bool(cy_est_months)
 
     # ── Forecast seasonal shares ──────────────────────────────────────────
-    forecast_cfg  = load_forecast_config()
-    _usda_saved_w = forecast_cfg.get(("wheat", field))
-    shares_w      = _compute_seasonal_shares(monthly_pivot, complete_years, months)
+    # Limit to recent 5 complete years for share computation.
+    forecast_cfg    = load_forecast_config()
+    _usda_saved_w   = forecast_cfg.get(("wheat", field))
+    _share_years_w  = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
+    shares_w        = _compute_seasonal_shares(monthly_pivot, _share_years_w, months)
 
     # ── Info strip ───────────────────────────────────────────────────────
     st.markdown(f"""

@@ -2106,7 +2106,7 @@ def _render_ytd_scatter(
             showlegend=False,
         ))
 
-    # OLS regression line — same color as the CY MYTD vertical marker
+    # OLS regression line
     x_lo = max(0.0, float(np.min(x_arr)) * 0.85)
     x_hi = max(float(np.max(x_arr)), cy_ytd) * 1.10
     fig.add_trace(go.Scatter(
@@ -2114,7 +2114,7 @@ def _render_ytd_scatter(
         y=[slope * x_lo + intercept, slope * x_hi + intercept],
         mode="lines",
         name=f"OLS Fit  (R²={r2:.2f})",
-        line=dict(color=accent_color, width=1.5, dash="dot"),
+        line=dict(color="#78909c", width=1.5, dash="dot"),
         hoverinfo="skip",
         showlegend=True,
         legendrank=800,
@@ -2132,6 +2132,23 @@ def _render_ytd_scatter(
         showarrow=False,
         font=dict(size=9, color=accent_color, family="Arial"),
         xanchor="left", yanchor="top",
+        bgcolor="rgba(30,33,36,0.75)",
+    )
+
+    # M3 projected final horizontal line — same accent color as MYTD vertical
+    fig.add_shape(
+        type="line",
+        x0=0, x1=1, xref="paper",
+        y0=projected, y1=projected,
+        line=dict(color=accent_color, width=1.5, dash="dash"),
+    )
+    fig.add_annotation(
+        x=0.0, xref="paper",
+        y=projected,
+        text=f"<b>M3 Projection</b> {fn(projected)}",
+        showarrow=False,
+        font=dict(size=9, color=accent_color, family="Arial"),
+        xanchor="left", yanchor="bottom",
         bgcolor="rgba(30,33,36,0.75)",
     )
 

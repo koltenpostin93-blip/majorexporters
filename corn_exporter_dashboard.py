@@ -2557,15 +2557,23 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     )
 
     # ── USDA Forecast input ───────────────────────────────────────────────
-    # For aggregate fields (TotalNonUS, MajorExporter) the USDA total is derived
-    # automatically by summing the individual component country USDA inputs that
-    # are already entered on their own tabs — no duplicate data entry needed.
-    # For all other fields the user enters the WASDE number manually.
+    # Soybeans / Meal: all components share USDA Oct-Sep → safe to auto-derive
+    #   the aggregate total by summing component country inputs.
+    # Corn: each country uses a different marketing year (US Sep-Aug, Ukraine
+    #   Oct-Sep, AR/BR Mar-Feb) → summing USDA totals is invalid.  Instead,
+    #   TotalNonUS and MajorExporter get a direct manual entry field so the user
+    #   can type in the USDA WASDE published aggregate (which USDA aligns to
+    #   Oct-Sep in its supply/demand tables).
+    # Wheat: aggregate forecast disabled (see wheat tab).
 
-    _AGGREGATE_COMPS = {
-        "TotalNonUS":    cfg.get("non_us_comps", []),
-        "MajorExporter": cfg.get("major_comps",  []),
-    }
+    _AGGREGATE_COMPS = (
+        {
+            "TotalNonUS":    cfg.get("non_us_comps", []),
+            "MajorExporter": cfg.get("major_comps",  []),
+        }
+        if commodity in ("soybeans", "soybeanmeal")
+        else {}   # corn (and any future commodity): manual entry for aggregates
+    )
     _model_legend_html = (
         f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
         f'<b style="color:#fdd835;">●</b> Dotted yellow line = <b>USDA Seasonal</b>'
@@ -3227,10 +3235,11 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     )
 
     # ── USDA Forecast input ───────────────────────────────────────────────
-    _W_AGGREGATE_COMPS = {
-        "TotalNonUS":    cfg.get("non_us_comps", []),
-        "MajorExporter": cfg.get("major_comps",  []),
-    }
+    # Wheat aggregate tabs (TotalNonUS, MajorExporter) are skipped — too many
+    # different marketing year conventions across wheat-exporting countries to
+    # produce a meaningful aggregate forecast here.
+    _W_SKIP_AGGREGATE = {"TotalNonUS", "MajorExporter"}
+
     _w_legend_html = (
         f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
         f'<b style="color:#fdd835;">●</b> Dotted yellow = <b>USDA Seasonal</b> forecast<br>'
@@ -3240,60 +3249,15 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         f'</div>'
     )
 
-    if field in _W_AGGREGATE_COMPS:
-        _w_comp_fields = _W_AGGREGATE_COMPS[field]
-        _w_comp_totals: dict[str, float] = {}
-        for _wc in _w_comp_fields:
-            _wc_key = f"wheat_{_wc}_usda_input"
-            if _wc_key in st.session_state and float(st.session_state[_wc_key]) > 0:
-                _w_comp_totals[_wc] = float(st.session_state[_wc_key])
-            else:
-                _wc_saved = forecast_cfg.get(("wheat", _wc))
-                if _wc_saved:
-                    _wv = float(_wc_saved) * unit_factor if use_bushels else float(_wc_saved)
-                    if _wv > 0:
-                        _w_comp_totals[_wc] = _wv
-
-        _w_derived = sum(_w_comp_totals.values()) if _w_comp_totals else 0.0
-
-        with st.expander(
-            f"📈  USDA MY Forecast — {field_label}",
-            expanded=_w_derived > 0,
-        ):
-            _wag1, _wag2 = st.columns([2, 3])
-            with _wag1:
-                if _w_comp_totals:
-                    _w_rows = "".join(
-                        f'<tr><td style="padding:2px 10px 2px 0;color:#aab4c0;">'
-                        f'{FIELDS.get(c, c)}</td>'
-                        f'<td style="text-align:right;color:#fff;font-weight:600;">'
-                        f'{v:,.0f}</td></tr>'
-                        for c, v in _w_comp_totals.items()
-                    )
-                    st.markdown(
-                        f'<div style="font-family:Arial;font-size:12px;">'
-                        f'<b style="color:#8a9aaa;">Component USDA totals ({unit_short}):</b>'
-                        f'<table style="margin-top:6px;border-collapse:collapse;">'
-                        f'{_w_rows}'
-                        f'<tr style="border-top:1px solid #444;">'
-                        f'<td style="padding:4px 10px 2px 0;color:#aab4c0;font-weight:700;">Total</td>'
-                        f'<td style="text-align:right;color:{JSA_CYAN};font-weight:700;">'
-                        f'{_w_derived:,.0f}</td></tr>'
-                        f'</table>'
-                        f'<span style="color:#666;font-size:11px;">'
-                        f'Auto-derived — update individual country inputs to change.</span>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.info(
-                        "Enter USDA WASDE totals on the individual country tabs to enable forecasting here.",
-                        icon="ℹ️",
-                    )
-            with _wag2:
-                st.markdown(_w_legend_html, unsafe_allow_html=True)
-
-        usda_total_w = _w_derived if _w_derived > 0 else None
+    if field in _W_SKIP_AGGREGATE:
+        # No M1/M2 forecast for wheat aggregate categories
+        st.info(
+            "M1/M2 forecasting is not available for wheat aggregate categories "
+            "(Total Non-US, Major Exporters) due to mixed marketing year conventions "
+            "across exporting countries.",
+            icon="📋",
+        )
+        usda_total_w = None
 
     else:
         _saved_disp_w = 0.0

@@ -2491,9 +2491,17 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # Use only the most recent 5 complete years so share distributions reflect
     # current competitive dynamics rather than older export patterns.
     forecast_cfg    = load_forecast_config()
-    _usda_saved     = forecast_cfg.get((commodity, field))   # Excel default, may be None
     _share_years    = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares          = _compute_seasonal_shares(monthly_pivot, _share_years, months)
+
+    # Local-MY detection for this field:
+    #   Brazil/Argentina toggle ON  → read "Brazil_Local"/"Argentina_Local" row from Excel
+    #                                 and use a separate session-state key (_local_)
+    #   All other fields            → read the standard row, standard key
+    # US uses a single key (Sep-Aug ≈ Oct-Sep difference is minimal).
+    _is_local_field = bool(field in MAR_FEB_FIELDS and arbr_local_my)
+    _fc_lookup      = f"{field}_Local" if _is_local_field else field
+    _usda_saved     = forecast_cfg.get((commodity, _fc_lookup))   # Excel default, may be None
 
     # ── Info strip ────────────────────────────────────────────────────────
     is_import_field = field in cfg["import_fields"]
@@ -2572,20 +2580,30 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
     if field in _AGGREGATE_COMPS:
         # ── Derived aggregate USDA total ──────────────────────────────────
+        # Aggregates (TotalNonUS, MajorExporter) always run on Oct-Sep, so we
+        # ALWAYS use the standard (non-local) session key and Excel row for each
+        # component — never the _local_ variant — to keep marketing years aligned.
+        # Each country uses its Oct-Sep USDA number entered on its individual tab
+        # (Brazil & Argentina: enter the Oct-Sep value when the local toggle is OFF).
         comp_fields = _AGGREGATE_COMPS[field]
-        comp_totals: dict[str, float] = {}
+        comp_totals:  dict[str, float] = {}
+        missing_comps: list[str] = []
         for _comp in comp_fields:
-            # Prefer live session-state value (already in display units);
-            # fall back to the Excel-saved value converted to display units.
+            # Always use standard (Oct-Sep) key — _local_ keys are intentionally excluded
             _comp_key = f"{pfx}_{_comp}_usda_input"
             if _comp_key in st.session_state and float(st.session_state[_comp_key]) > 0:
                 comp_totals[_comp] = float(st.session_state[_comp_key])
             else:
+                # Fall back to standard (non-local) Excel row
                 _comp_saved = forecast_cfg.get((commodity, _comp))
                 if _comp_saved:
                     _cv = float(_comp_saved) * unit_factor if use_bushels else float(_comp_saved)
                     if _cv > 0:
                         comp_totals[_comp] = _cv
+                    else:
+                        missing_comps.append(FIELDS.get(_comp, _comp))
+                else:
+                    missing_comps.append(FIELDS.get(_comp, _comp))
 
         derived_total = sum(comp_totals.values()) if comp_totals else 0.0
 
@@ -2603,9 +2621,15 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                         f'{v:,.0f}</td></tr>'
                         for c, v in comp_totals.items()
                     )
+                    _missing_note = (
+                        f'<div style="color:#e57373;font-size:11px;margin-top:6px;">'
+                        f'⚠ Missing Oct–Sep input for: {", ".join(missing_comps)}'
+                        f'</div>'
+                        if missing_comps else ""
+                    )
                     st.markdown(
                         f'<div style="font-family:Arial;font-size:12px;">'
-                        f'<b style="color:#8a9aaa;">Component USDA totals ({unit_short}):</b>'
+                        f'<b style="color:#8a9aaa;">Component USDA totals — Oct–Sep ({unit_short}):</b>'
                         f'<table style="margin-top:6px;border-collapse:collapse;">'
                         f'{_rows}'
                         f'<tr style="border-top:1px solid #444;">'
@@ -2613,15 +2637,18 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                         f'<td style="text-align:right;color:{JSA_CYAN};font-weight:700;">'
                         f'{derived_total:,.0f}</td></tr>'
                         f'</table>'
-                        f'<span style="color:#666;font-size:11px;">'
-                        f'Auto-derived — update individual country inputs to change.</span>'
+                        f'{_missing_note}'
+                        f'<span style="color:#555;font-size:11px;display:block;margin-top:4px;">'
+                        f'Uses each country\'s Oct–Sep USDA value (not local MY). '
+                        f'Enter Oct–Sep totals on individual country tabs with local toggle OFF.'
+                        f'</span>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
                 else:
                     st.info(
-                        "Enter USDA WASDE totals on the individual country tabs "
-                        "(e.g. US, Brazil, Argentina, Ukraine) to enable forecasting here.",
+                        "Enter Oct–Sep USDA WASDE totals on each individual country tab "
+                        "(with local MY toggle OFF) to enable aggregate forecasting here.",
                         icon="ℹ️",
                     )
             with _ag2:
@@ -2635,13 +2662,17 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         if _usda_saved:
             _saved_display = float(_usda_saved) * unit_factor if use_bushels else float(_usda_saved)
 
-        # Pre-seed session state from Excel so the widget shows the saved value
-        # even after a page reload.  Only overrides when the key doesn't exist yet
-        # (preserves any value the user has already typed this session).
-        _usda_key = f"{pfx}_{field}_usda_input"
+        # Key includes "_local" suffix when Brazil/Argentina is on Local MY so the
+        # standard (Oct-Sep) and local (Mar-Feb / Apr-Mar) values are stored separately
+        # and can both coexist in session state without overwriting each other.
+        _usda_key = (f"{pfx}_{field}_local_usda_input"
+                     if _is_local_field else f"{pfx}_{field}_usda_input")
         if _saved_display > 0 and _usda_key not in st.session_state:
             st.session_state[_usda_key] = _saved_display
 
+        # Label the input with the active MY convention so the user knows which
+        # total to enter (Oct-Sep WASDE vs local Mar-Feb / Apr-Mar).
+        _my_suffix = f" ({my_label})" if _is_local_field else ""
         with st.expander(
             f"📈  USDA MY Forecast — {field_label}",
             expanded=bool(st.session_state.get(_usda_key, _saved_display)),
@@ -2649,7 +2680,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
             _fc1, _fc2 = st.columns([2, 3])
             with _fc1:
                 usda_input = st.number_input(
-                    f"USDA {cy} MY Total ({unit_short})",
+                    f"USDA {cy} MY Total{_my_suffix} ({unit_short})",
                     min_value=0.0,
                     value=_saved_display,
                     step=500.0,
@@ -2657,8 +2688,8 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                     key=_usda_key,
                     help=(
                         f"Enter the USDA WASDE marketing year total for {field_label} "
-                        f"in {unit_short}. This drives the Seasonal and Pace-Adjusted "
-                        f"forecast lines on the chart below."
+                        f"in {unit_short}{_my_suffix}. This drives the Seasonal and "
+                        f"Pace-Adjusted forecast lines on the chart below."
                     ),
                 )
             with _fc2:

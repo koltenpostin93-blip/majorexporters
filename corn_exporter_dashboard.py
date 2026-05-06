@@ -2017,6 +2017,210 @@ def _render_forecast_panel(pace_info: dict, unit_short: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MYTD → FINAL REGRESSION SCATTER  (Model 3)
+# ─────────────────────────────────────────────────────────────────────────────
+def _render_ytd_scatter(
+    monthly_pivot: dict,
+    complete_years: list,
+    cy: str,
+    months: list,
+    cy_est_months: set,
+    field_label: str,
+    unit_short: str,
+    unit_decimals: int,
+    logo_b64: str | None = None,
+    accent_color: str = "#0693e3",
+) -> None:
+    """Scatter of historical MYTD vs final MY total with OLS regression.
+
+    For each complete prior year the point (cumulative through the same
+    marketing-year month we're currently at, full-year total) is plotted.
+    A linear regression line is fitted and the current-year MYTD is projected
+    onto it to produce a data-driven 'Model 3' implied full-year forecast.
+    """
+    # ── YTD anchor: months with official (non-estimate) CY data ──────────
+    cy_official = [m for m in months
+                   if monthly_pivot[m].get(cy) is not None
+                   and m not in cy_est_months]
+    if not cy_official:
+        return   # no official data yet, nothing to anchor
+
+    cy_ytd   = sum(monthly_pivot[m].get(cy) or 0.0 for m in cy_official)
+    ytd_thru = cy_official[-1]   # last official month label for axis / titles
+
+    # ── Historical (ytd, final) pairs ────────────────────────────────────
+    points: list[tuple[str, float, float]] = []
+    for yr in complete_years:
+        ytd_h   = sum((monthly_pivot[m].get(yr) or 0.0) for m in cy_official)
+        final_h = sum((monthly_pivot[m].get(yr) or 0.0) for m in months)
+        if ytd_h > 0 and final_h > 0:
+            points.append((yr, ytd_h, final_h))
+
+    if len(points) < 3:
+        return   # too sparse for a meaningful regression
+
+    x_arr = np.array([p[1] for p in points])
+    y_arr = np.array([p[2] for p in points])
+    n     = len(points)
+
+    # ── OLS: final = slope * ytd + intercept ─────────────────────────────
+    slope, intercept = map(float, np.polyfit(x_arr, y_arr, 1))
+    y_hat = slope * x_arr + intercept
+    ss_res = float(np.sum((y_arr - y_hat) ** 2))
+    ss_tot = float(np.sum((y_arr - float(np.mean(y_arr))) ** 2))
+    r2     = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+    projected   = slope * cy_ytd + intercept
+    hist_avg    = float(np.mean(y_arr))
+    proj_delta  = projected - hist_avg
+    proj_col    = "#4caf50" if proj_delta >= 0 else "#ef5350"
+    proj_sign   = "+" if proj_delta >= 0 else ""
+    fit_label   = "Strong" if r2 >= 0.70 else ("Moderate" if r2 >= 0.40 else "Weak")
+
+    dec = unit_decimals
+    fn  = lambda v: fmt_num(v, dec)
+
+    # ── Build figure ──────────────────────────────────────────────────────
+    fig = go.Figure()
+
+    # Historical dots — gradient from faded (oldest) to bright (newest)
+    yr_sorted = sorted(yr for yr, *_ in points)
+    for yr, ytd_h, final_h in points:
+        idx      = yr_sorted.index(yr)
+        t        = idx / max(n - 1, 1)   # 0 = oldest, 1 = newest
+        dot_col  = f"rgb({int(80+80*t)},{int(100+80*t)},{int(140+70*t)})"
+        fig.add_trace(go.Scatter(
+            x=[ytd_h], y=[final_h],
+            mode="markers+text",
+            marker=dict(size=9, color=dot_col,
+                        line=dict(color="#1e2124", width=1)),
+            text=[yr], textposition="top center",
+            textfont=dict(size=9, color=dot_col),
+            hovertemplate=(
+                f"<b>{yr}</b><br>"
+                f"MYTD thru {ytd_thru}: <b>{fn(ytd_h)}</b> {unit_short}<br>"
+                f"Final MY: <b>{fn(final_h)}</b> {unit_short}"
+                "<extra></extra>"
+            ),
+            showlegend=False,
+        ))
+
+    # OLS regression line
+    x_lo = max(0.0, float(np.min(x_arr)) * 0.85)
+    x_hi = max(float(np.max(x_arr)), cy_ytd) * 1.10
+    fig.add_trace(go.Scatter(
+        x=[x_lo, x_hi],
+        y=[slope * x_lo + intercept, slope * x_hi + intercept],
+        mode="lines",
+        name=f"OLS Fit  (R²={r2:.2f})",
+        line=dict(color="#78909c", width=1.5, dash="dot"),
+        hoverinfo="skip",
+        showlegend=True,
+        legendrank=800,
+    ))
+
+    # CY MYTD vertical marker
+    fig.add_shape(
+        type="line",
+        x0=cy_ytd, x1=cy_ytd, y0=0, y1=1, yref="paper",
+        line=dict(color=accent_color, width=1.5, dash="dash"),
+    )
+    fig.add_annotation(
+        x=cy_ytd, y=0.98, yref="paper",
+        text=f"CY MYTD<br>{fn(cy_ytd)} {unit_short}",
+        showarrow=False,
+        font=dict(size=9, color=accent_color, family="Arial"),
+        xanchor="left", yanchor="top",
+        bgcolor="rgba(30,33,36,0.75)",
+    )
+
+    # Projected CY star on regression line
+    fig.add_trace(go.Scatter(
+        x=[cy_ytd], y=[projected],
+        mode="markers",
+        marker=dict(size=14, symbol="star",
+                    color=accent_color,
+                    line=dict(color="#ffffff", width=1.5)),
+        name=f"CY Projection: {fn(projected)} {unit_short}",
+        hovertemplate=(
+            "<b>CY Model 3 Projection</b><br>"
+            f"MYTD thru {ytd_thru}: {fn(cy_ytd)} {unit_short}<br>"
+            f"Implied Final MY: <b>{fn(projected)}</b> {unit_short}<br>"
+            f"R² = {r2:.3f}"
+            "<extra></extra>"
+        ),
+        showlegend=True,
+        legendrank=700,
+    ))
+
+    layout = _base_layout(
+        f"MYTD through {ytd_thru} vs Final MY Total — {field_label}",
+        f"MYTD through {ytd_thru}  ({unit_short})",
+        f"Final MY Total  ({unit_short})",
+    )
+    fig.update_layout(**layout)
+    _add_chart_watermark(fig, logo_b64)
+
+    # ── Tiles ─────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"### 📉 Model 3 — MYTD Regression Forecast  ·  {field_label}")
+
+    c1, c2, c3, _ = st.columns([1, 1, 1, 1])
+    with c1:
+        st.markdown(
+            f'<div style="background:#1e2124;border-top:3px solid {accent_color};'
+            f'border-radius:6px;padding:12px 14px;text-align:center;">'
+            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
+            f'margin-bottom:4px;">Model 3 — MYTD Regression</div>'
+            f'<div style="font-size:20px;font-weight:700;color:#fff;'
+            f'font-family:Arial;">{fn(projected)}</div>'
+            f'<div style="font-size:11px;color:{accent_color};font-family:Arial;'
+            f'margin-top:2px;">{unit_short}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            f'<div style="background:#1e2124;border-top:3px solid #78909c;'
+            f'border-radius:6px;padding:12px 14px;text-align:center;">'
+            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
+            f'margin-bottom:4px;">Fit Quality (R²)</div>'
+            f'<div style="font-size:20px;font-weight:700;color:#fff;'
+            f'font-family:Arial;">{r2:.3f}</div>'
+            f'<div style="font-size:11px;color:#78909c;font-family:Arial;'
+            f'margin-top:2px;">{fit_label}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            f'<div style="background:#1e2124;border-top:3px solid #f9a825;'
+            f'border-radius:6px;padding:12px 14px;text-align:center;">'
+            f'<div style="font-size:11px;color:#8a9aaa;font-family:Arial;'
+            f'margin-bottom:4px;">MYTD Thru / Sample</div>'
+            f'<div style="font-size:20px;font-weight:700;color:#fff;'
+            f'font-family:Arial;">{ytd_thru}</div>'
+            f'<div style="font-size:11px;color:#f9a825;font-family:Arial;'
+            f'margin-top:2px;">{n} prior years</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Context note
+    st.markdown(
+        f'<div style="font-family:Arial;font-size:11px;color:#5a6878;'
+        f'padding:4px 0 12px 2px;">'
+        f'Each dot = one prior marketing year positioned at its cumulative '
+        f'shipments through <b style="color:#8a9aaa;">{ytd_thru}</b> (x-axis) '
+        f'vs its full MY total (y-axis). The OLS line projects where the '
+        f'current year\'s MYTD of <b style="color:{accent_color};">'
+        f'{fn(cy_ytd)} {unit_short}</b> implies a final total of '
+        f'<b style="color:{accent_color};">{fn(projected)} {unit_short}</b> '
+        f'(vs historical avg final of {fn(hist_avg)} {unit_short}).</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # COMMODITY TAB RENDERER
 # ─────────────────────────────────────────────────────────────────────────────
 def _run_commodity_tab(commodity: str, use_bushels: bool,
@@ -2396,6 +2600,13 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
 
     # ── Forecast Panel ────────────────────────────────────────────────────
     _render_forecast_panel(pace_info, unit_short, unit_decimals, field_label)
+
+    # ── Model 3 — MYTD Regression Scatter ────────────────────────────────
+    _render_ytd_scatter(
+        monthly_pivot, complete_years, cy, months, cy_est_months,
+        field_label, unit_short, unit_decimals, logo_white_b64,
+        accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+    )
 
     # ── Volume Comparison Column Chart ────────────────────────────────────
     st.markdown("---")
@@ -2949,6 +3160,13 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
 
     # ── Forecast Panel ────────────────────────────────────────────────────
     _render_forecast_panel(pace_info_w, unit_short, unit_decimals, field_label)
+
+    # ── Model 3 — MYTD Regression Scatter ────────────────────────────────
+    _render_ytd_scatter(
+        monthly_pivot, complete_years, cy, months, cy_est_months,
+        field_label, unit_short, unit_decimals, logo_white_b64,
+        accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+    )
 
     # ── Volume Comparison ────────────────────────────────────────────────
     st.markdown("---")

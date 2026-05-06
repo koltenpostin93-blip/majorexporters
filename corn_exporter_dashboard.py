@@ -2106,7 +2106,7 @@ def _render_ytd_scatter(
             showlegend=False,
         ))
 
-    # OLS regression line
+    # OLS regression line — same color as the CY MYTD vertical marker
     x_lo = max(0.0, float(np.min(x_arr)) * 0.85)
     x_hi = max(float(np.max(x_arr)), cy_ytd) * 1.10
     fig.add_trace(go.Scatter(
@@ -2114,7 +2114,7 @@ def _render_ytd_scatter(
         y=[slope * x_lo + intercept, slope * x_hi + intercept],
         mode="lines",
         name=f"OLS Fit  (R²={r2:.2f})",
-        line=dict(color="#78909c", width=1.5, dash="dot"),
+        line=dict(color=accent_color, width=1.5, dash="dot"),
         hoverinfo="skip",
         showlegend=True,
         legendrank=800,

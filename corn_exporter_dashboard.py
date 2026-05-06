@@ -1303,13 +1303,13 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             if data_pivot[m].get(cy) is not None:
                 conn_m, conn_v = m, data_pivot[m][cy]
 
-        # ±1σ forecast uncertainty band
+        # ±0.5σ forecast uncertainty band (half-sigma = tighter "likely range")
         if shares:
             band_x, band_hi, band_lo = [], [], []
             for m in months:
                 if m in fcst_months_set and m in shares:
                     center = usda_total * shares[m]["olympic"] / 100.0
-                    sigma  = usda_total * shares[m]["std"] / 100.0
+                    sigma  = usda_total * shares[m]["std"] / 100.0 * 0.5
                     band_x.append(m)
                     band_hi.append(center + sigma)
                     band_lo.append(max(0.0, center - sigma))
@@ -1319,7 +1319,7 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
                     y=band_hi + band_lo[::-1],
                     fill="toself", fillcolor="rgba(255,193,7,0.18)",
                     line=dict(color="rgba(0,0,0,0)"),
-                    name="Forecast ±1σ",
+                    name="Forecast ±0.5σ",
                     hoverinfo="skip", showlegend=True, legendrank=950,
                 ))
 
@@ -2317,7 +2317,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                 — shifts forecast based on YTD pace vs seasonal baseline
                 (activates once official data exists)<br>
                 <b style="color:#9c27b0; opacity:0.5;">▓</b> Shaded band =
-                <b>±1σ uncertainty</b> from historical variance in seasonal shares
+                <b>±0.5σ likely range</b> from historical variance in seasonal shares
                 </div>""",
                 unsafe_allow_html=True,
             )

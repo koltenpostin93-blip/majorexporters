@@ -2175,11 +2175,11 @@ def _render_ytd_scatter(
     pi = pace_info or {}
     _ref_lines = []
     if pi.get("usda_total"):
-        _ref_lines.append((pi["usda_total"],  "USDA Total",  "#0693e3", "dash"))
+        _ref_lines.append((pi["usda_total"],  "USDA Total",  "#ff1744", "dash"))
     if pi.get("model1_total"):
-        _ref_lines.append((pi["model1_total"], "M1 Seasonal", "#9c27b0", "dot"))
+        _ref_lines.append((pi["model1_total"], "M1 Seasonal", "#fdd835", "dot"))
     if pi.get("has_ytd") and pi.get("model2_total"):
-        _ref_lines.append((pi["model2_total"], "M2 Pace Adj", "#00bcd4", "dashdot"))
+        _ref_lines.append((pi["model2_total"], "M2 Pace Adj", "#00e676", "dashdot"))
 
     for ref_val, ref_lbl, ref_col, ref_dash in _ref_lines:
         fig.add_shape(

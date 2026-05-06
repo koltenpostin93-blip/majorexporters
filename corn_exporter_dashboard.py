@@ -2030,6 +2030,7 @@ def _render_ytd_scatter(
     unit_decimals: int,
     logo_b64: str | None = None,
     accent_color: str = "#0693e3",
+    pace_info: dict | None = None,
 ) -> None:
     """Scatter of historical MYTD vs final MY total with OLS regression.
 
@@ -2141,7 +2142,7 @@ def _render_ytd_scatter(
         marker=dict(size=14, symbol="star",
                     color=accent_color,
                     line=dict(color="#ffffff", width=1.5)),
-        name=f"CY Projection: {fn(projected)} {unit_short}",
+        name=f"M3 Projection: {fn(projected)} {unit_short}",
         hovertemplate=(
             "<b>CY Model 3 Projection</b><br>"
             f"MYTD thru {ytd_thru}: {fn(cy_ytd)} {unit_short}<br>"
@@ -2152,6 +2153,33 @@ def _render_ytd_scatter(
         showlegend=True,
         legendrank=700,
     ))
+
+    # ── Horizontal reference lines from Model 1 / Model 2 / USDA ─────────
+    pi = pace_info or {}
+    _ref_lines = []
+    if pi.get("usda_total"):
+        _ref_lines.append((pi["usda_total"],  "USDA Total",  "#0693e3", "dash"))
+    if pi.get("model1_total"):
+        _ref_lines.append((pi["model1_total"], "M1 Seasonal", "#9c27b0", "dot"))
+    if pi.get("has_ytd") and pi.get("model2_total"):
+        _ref_lines.append((pi["model2_total"], "M2 Pace Adj", "#00bcd4", "dashdot"))
+
+    for ref_val, ref_lbl, ref_col, ref_dash in _ref_lines:
+        fig.add_shape(
+            type="line",
+            x0=0, x1=1, xref="paper",
+            y0=ref_val, y1=ref_val,
+            line=dict(color=ref_col, width=1.2, dash=ref_dash),
+        )
+        fig.add_annotation(
+            x=1.0, xref="paper",
+            y=ref_val,
+            text=f"<b>{ref_lbl}</b> {fn(ref_val)}",
+            showarrow=False,
+            font=dict(size=9, color=ref_col, family="Arial"),
+            xanchor="right", yanchor="bottom",
+            bgcolor="rgba(30,33,36,0.75)",
+        )
 
     layout = _base_layout(
         f"MYTD through {ytd_thru} vs Final MY Total — {field_label}",
@@ -2606,6 +2634,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         monthly_pivot, complete_years, cy, months, cy_est_months,
         field_label, unit_short, unit_decimals, logo_white_b64,
         accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+        pace_info=pace_info,
     )
 
     # ── Volume Comparison Column Chart ────────────────────────────────────
@@ -3166,6 +3195,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         monthly_pivot, complete_years, cy, months, cy_est_months,
         field_label, unit_short, unit_decimals, logo_white_b64,
         accent_color=cfg["tile_accents"].get(field, JSA_CYAN),
+        pace_info=pace_info_w,
     )
 
     # ── Volume Comparison ────────────────────────────────────────────────

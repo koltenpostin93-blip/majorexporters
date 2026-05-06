@@ -1316,13 +1316,17 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
             if data_pivot[m].get(cy) is not None and m not in est_months:
                 conn_m, conn_v = m, data_pivot[m][cy]
 
-        # ±0.5σ forecast uncertainty band (half-sigma = tighter "likely range")
-        if shares:
+        # ±0.5σ forecast uncertainty band — center pulled from budget-constrained
+        # model1_pivot so the band is consistent with the M1 line.
+        # Sigma uses the coefficient of variation (std/olympic) scaled to center.
+        if shares and model1_pivot:
             band_x, band_hi, band_lo = [], [], []
             for m in months:
                 if m in fcst_months_set and m in shares:
-                    center = usda_total * shares[m]["olympic"] / 100.0
-                    sigma  = usda_total * shares[m]["std"] / 100.0 * 0.5
+                    center = model1_pivot[m].get(cy) or 0.0
+                    oly    = shares[m]["olympic"]
+                    sigma  = (center * shares[m]["std"] / oly * 0.5
+                               if oly > 0 else 0.0)
                     band_x.append(m)
                     band_hi.append(center + sigma)
                     band_lo.append(max(0.0, center - sigma))

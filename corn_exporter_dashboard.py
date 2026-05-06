@@ -2549,49 +2549,122 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     )
 
     # ── USDA Forecast input ───────────────────────────────────────────────
-    # Default to saved Excel value (converted to display units if needed)
-    _saved_display = 0.0
-    if _usda_saved:
-        _saved_display = float(_usda_saved) * unit_factor if use_bushels else float(_usda_saved)
+    # For aggregate fields (TotalNonUS, MajorExporter) the USDA total is derived
+    # automatically by summing the individual component country USDA inputs that
+    # are already entered on their own tabs — no duplicate data entry needed.
+    # For all other fields the user enters the WASDE number manually.
 
-    # Pre-seed session state from Excel so the widget shows the saved value
-    # even after a page reload.  Only overrides when the key doesn't exist yet
-    # (preserves any value the user has already typed this session).
-    _usda_key = f"{pfx}_{field}_usda_input"
-    if _saved_display > 0 and _usda_key not in st.session_state:
-        st.session_state[_usda_key] = _saved_display
+    _AGGREGATE_COMPS = {
+        "TotalNonUS":    cfg.get("non_us_comps", []),
+        "MajorExporter": cfg.get("major_comps",  []),
+    }
+    _model_legend_html = (
+        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
+        f'<b style="color:#fdd835;">●</b> Dotted yellow line = <b>USDA Seasonal</b>'
+        f' — distributes total via historical monthly share %<br>'
+        f'<b style="color:#00e676;">●</b> Green dash-dot line = <b>Pace-Adjusted</b>'
+        f' — shifts forecast based on YTD pace vs seasonal baseline'
+        f' (activates once official data exists)<br>'
+        f'<b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band ='
+        f' <b>±0.5σ likely range</b> from historical variance in seasonal shares'
+        f'</div>'
+    )
 
-    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(st.session_state.get(_usda_key, _saved_display))):
-        _fc1, _fc2 = st.columns([2, 3])
-        with _fc1:
-            usda_input = st.number_input(
-                f"USDA {cy} MY Total ({unit_short})",
-                min_value=0.0,
-                value=_saved_display,
-                step=500.0,
-                format="%.0f",
-                key=_usda_key,
-                help=(
-                    f"Enter the USDA WASDE marketing year total for {field_label} "
-                    f"in {unit_short}. This drives the Seasonal and Pace-Adjusted "
-                    f"forecast lines on the chart below."
-                ),
-            )
-        with _fc2:
-            st.markdown(
-                f"""<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">
-                <b style="color:#fdd835;">●</b> Dotted yellow line = <b>USDA Seasonal</b>
-                — distributes your total via historical monthly share %<br>
-                <b style="color:#00e676;">●</b> Green dash-dot line = <b>Pace-Adjusted</b>
-                — shifts forecast based on YTD pace vs seasonal baseline
-                (activates once official data exists)<br>
-                <b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band =
-                <b>±0.5σ likely range</b> from historical variance in seasonal shares
-                </div>""",
-                unsafe_allow_html=True,
-            )
+    if field in _AGGREGATE_COMPS:
+        # ── Derived aggregate USDA total ──────────────────────────────────
+        comp_fields = _AGGREGATE_COMPS[field]
+        comp_totals: dict[str, float] = {}
+        for _comp in comp_fields:
+            # Prefer live session-state value (already in display units);
+            # fall back to the Excel-saved value converted to display units.
+            _comp_key = f"{pfx}_{_comp}_usda_input"
+            if _comp_key in st.session_state and float(st.session_state[_comp_key]) > 0:
+                comp_totals[_comp] = float(st.session_state[_comp_key])
+            else:
+                _comp_saved = forecast_cfg.get((commodity, _comp))
+                if _comp_saved:
+                    _cv = float(_comp_saved) * unit_factor if use_bushels else float(_comp_saved)
+                    if _cv > 0:
+                        comp_totals[_comp] = _cv
 
-    usda_total = usda_input if usda_input > 0 else None
+        derived_total = sum(comp_totals.values()) if comp_totals else 0.0
+
+        with st.expander(
+            f"📈  USDA MY Forecast — {field_label}",
+            expanded=derived_total > 0,
+        ):
+            _ag1, _ag2 = st.columns([2, 3])
+            with _ag1:
+                if comp_totals:
+                    _rows = "".join(
+                        f'<tr><td style="padding:2px 10px 2px 0;color:#aab4c0;">'
+                        f'{FIELDS.get(c, c)}</td>'
+                        f'<td style="text-align:right;color:#fff;font-weight:600;">'
+                        f'{v:,.0f}</td></tr>'
+                        for c, v in comp_totals.items()
+                    )
+                    st.markdown(
+                        f'<div style="font-family:Arial;font-size:12px;">'
+                        f'<b style="color:#8a9aaa;">Component USDA totals ({unit_short}):</b>'
+                        f'<table style="margin-top:6px;border-collapse:collapse;">'
+                        f'{_rows}'
+                        f'<tr style="border-top:1px solid #444;">'
+                        f'<td style="padding:4px 10px 2px 0;color:#aab4c0;font-weight:700;">Total</td>'
+                        f'<td style="text-align:right;color:{JSA_CYAN};font-weight:700;">'
+                        f'{derived_total:,.0f}</td></tr>'
+                        f'</table>'
+                        f'<span style="color:#666;font-size:11px;">'
+                        f'Auto-derived — update individual country inputs to change.</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info(
+                        "Enter USDA WASDE totals on the individual country tabs "
+                        "(e.g. US, Brazil, Argentina, Ukraine) to enable forecasting here.",
+                        icon="ℹ️",
+                    )
+            with _ag2:
+                st.markdown(_model_legend_html, unsafe_allow_html=True)
+
+        usda_total = derived_total if derived_total > 0 else None
+
+    else:
+        # ── Manual USDA input (individual country / standard field) ───────
+        _saved_display = 0.0
+        if _usda_saved:
+            _saved_display = float(_usda_saved) * unit_factor if use_bushels else float(_usda_saved)
+
+        # Pre-seed session state from Excel so the widget shows the saved value
+        # even after a page reload.  Only overrides when the key doesn't exist yet
+        # (preserves any value the user has already typed this session).
+        _usda_key = f"{pfx}_{field}_usda_input"
+        if _saved_display > 0 and _usda_key not in st.session_state:
+            st.session_state[_usda_key] = _saved_display
+
+        with st.expander(
+            f"📈  USDA MY Forecast — {field_label}",
+            expanded=bool(st.session_state.get(_usda_key, _saved_display)),
+        ):
+            _fc1, _fc2 = st.columns([2, 3])
+            with _fc1:
+                usda_input = st.number_input(
+                    f"USDA {cy} MY Total ({unit_short})",
+                    min_value=0.0,
+                    value=_saved_display,
+                    step=500.0,
+                    format="%.0f",
+                    key=_usda_key,
+                    help=(
+                        f"Enter the USDA WASDE marketing year total for {field_label} "
+                        f"in {unit_short}. This drives the Seasonal and Pace-Adjusted "
+                        f"forecast lines on the chart below."
+                    ),
+                )
+            with _fc2:
+                st.markdown(_model_legend_html, unsafe_allow_html=True)
+
+        usda_total = usda_input if usda_input > 0 else None
 
     # Build forecast pivots from the live UI value
     model1_pivot, model2_pivot, pace_info = _build_forecast_pivots(
@@ -3123,41 +3196,105 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     )
 
     # ── USDA Forecast input ───────────────────────────────────────────────
-    _saved_disp_w = 0.0
-    if _usda_saved_w:
-        _saved_disp_w = float(_usda_saved_w) * unit_factor if use_bushels else float(_usda_saved_w)
+    _W_AGGREGATE_COMPS = {
+        "TotalNonUS":    cfg.get("non_us_comps", []),
+        "MajorExporter": cfg.get("major_comps",  []),
+    }
+    _w_legend_html = (
+        f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
+        f'<b style="color:#fdd835;">●</b> Dotted yellow = <b>USDA Seasonal</b> forecast<br>'
+        f'<b style="color:#00e676;">●</b> Green dash-dot = <b>Pace-Adjusted</b>'
+        f' (activates once official data exists)<br>'
+        f'<b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band = ±0.5σ likely range'
+        f'</div>'
+    )
 
-    _usda_key_w = f"wheat_{field}_usda_input"
-    if _saved_disp_w > 0 and _usda_key_w not in st.session_state:
-        st.session_state[_usda_key_w] = _saved_disp_w
+    if field in _W_AGGREGATE_COMPS:
+        _w_comp_fields = _W_AGGREGATE_COMPS[field]
+        _w_comp_totals: dict[str, float] = {}
+        for _wc in _w_comp_fields:
+            _wc_key = f"wheat_{_wc}_usda_input"
+            if _wc_key in st.session_state and float(st.session_state[_wc_key]) > 0:
+                _w_comp_totals[_wc] = float(st.session_state[_wc_key])
+            else:
+                _wc_saved = forecast_cfg.get(("wheat", _wc))
+                if _wc_saved:
+                    _wv = float(_wc_saved) * unit_factor if use_bushels else float(_wc_saved)
+                    if _wv > 0:
+                        _w_comp_totals[_wc] = _wv
 
-    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(st.session_state.get(_usda_key_w, _saved_disp_w))):
-        _fw1, _fw2 = st.columns([2, 3])
-        with _fw1:
-            usda_input_w = st.number_input(
-                f"USDA {cy} MY Total ({unit_short})",
-                min_value=0.0,
-                value=_saved_disp_w,
-                step=500.0,
-                format="%.0f",
-                key=_usda_key_w,
-                help=(
-                    f"Enter the USDA WASDE marketing year total for {field_label} "
-                    f"in {unit_short}."
-                ),
-            )
-        with _fw2:
-            st.markdown(
-                f"""<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">
-                <b style="color:#fdd835;">●</b> Dotted yellow = <b>USDA Seasonal</b> forecast<br>
-                <b style="color:#00e676;">●</b> Green dash-dot = <b>Pace-Adjusted</b>
-                (activates once official data exists)<br>
-                <b style="color:#fdd835; opacity:0.5;">▓</b> Shaded band = ±0.5σ likely range
-                </div>""",
-                unsafe_allow_html=True,
-            )
+        _w_derived = sum(_w_comp_totals.values()) if _w_comp_totals else 0.0
 
-    usda_total_w = usda_input_w if usda_input_w > 0 else None
+        with st.expander(
+            f"📈  USDA MY Forecast — {field_label}",
+            expanded=_w_derived > 0,
+        ):
+            _wag1, _wag2 = st.columns([2, 3])
+            with _wag1:
+                if _w_comp_totals:
+                    _w_rows = "".join(
+                        f'<tr><td style="padding:2px 10px 2px 0;color:#aab4c0;">'
+                        f'{FIELDS.get(c, c)}</td>'
+                        f'<td style="text-align:right;color:#fff;font-weight:600;">'
+                        f'{v:,.0f}</td></tr>'
+                        for c, v in _w_comp_totals.items()
+                    )
+                    st.markdown(
+                        f'<div style="font-family:Arial;font-size:12px;">'
+                        f'<b style="color:#8a9aaa;">Component USDA totals ({unit_short}):</b>'
+                        f'<table style="margin-top:6px;border-collapse:collapse;">'
+                        f'{_w_rows}'
+                        f'<tr style="border-top:1px solid #444;">'
+                        f'<td style="padding:4px 10px 2px 0;color:#aab4c0;font-weight:700;">Total</td>'
+                        f'<td style="text-align:right;color:{JSA_CYAN};font-weight:700;">'
+                        f'{_w_derived:,.0f}</td></tr>'
+                        f'</table>'
+                        f'<span style="color:#666;font-size:11px;">'
+                        f'Auto-derived — update individual country inputs to change.</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info(
+                        "Enter USDA WASDE totals on the individual country tabs to enable forecasting here.",
+                        icon="ℹ️",
+                    )
+            with _wag2:
+                st.markdown(_w_legend_html, unsafe_allow_html=True)
+
+        usda_total_w = _w_derived if _w_derived > 0 else None
+
+    else:
+        _saved_disp_w = 0.0
+        if _usda_saved_w:
+            _saved_disp_w = float(_usda_saved_w) * unit_factor if use_bushels else float(_usda_saved_w)
+
+        _usda_key_w = f"wheat_{field}_usda_input"
+        if _saved_disp_w > 0 and _usda_key_w not in st.session_state:
+            st.session_state[_usda_key_w] = _saved_disp_w
+
+        with st.expander(
+            f"📈  USDA MY Forecast — {field_label}",
+            expanded=bool(st.session_state.get(_usda_key_w, _saved_disp_w)),
+        ):
+            _fw1, _fw2 = st.columns([2, 3])
+            with _fw1:
+                usda_input_w = st.number_input(
+                    f"USDA {cy} MY Total ({unit_short})",
+                    min_value=0.0,
+                    value=_saved_disp_w,
+                    step=500.0,
+                    format="%.0f",
+                    key=_usda_key_w,
+                    help=(
+                        f"Enter the USDA WASDE marketing year total for {field_label} "
+                        f"in {unit_short}."
+                    ),
+                )
+            with _fw2:
+                st.markdown(_w_legend_html, unsafe_allow_html=True)
+
+        usda_total_w = usda_input_w if usda_input_w > 0 else None
 
     model1_pivot_w, model2_pivot_w, pace_info_w = _build_forecast_pivots(
         monthly_pivot, all_years, cy, months, shares_w, usda_total_w, cy_est_months

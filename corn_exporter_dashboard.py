@@ -1297,10 +1297,12 @@ def make_seasonal_chart(data_pivot, all_years, cy, complete_years,
     if model1_pivot and fcst_months_set and usda_total:
         dec_ = 1 if unit_short == "Mbu" else 0
 
-        # Find the last CY data point to connect forecast to actuals
+        # Find the last OFFICIAL CY data point to connect forecast to actuals.
+        # Must exclude estimate months — they also have data but are not the
+        # anchor; using them causes Plotly to draw a backwards diagonal line.
         conn_m = conn_v = None
         for m in months:
-            if data_pivot[m].get(cy) is not None:
+            if data_pivot[m].get(cy) is not None and m not in est_months:
                 conn_m, conn_v = m, data_pivot[m][cy]
 
         # ±0.5σ forecast uncertainty band (half-sigma = tighter "likely range")

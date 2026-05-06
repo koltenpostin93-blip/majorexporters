@@ -575,68 +575,6 @@ def load_forecast_config() -> dict:
         return {}
 
 
-def _local_to_oct_sep_ratio(df: pd.DataFrame, comp: str, cfg: dict,
-                             use_bushels: bool = False,
-                             unit_factor: float = 1.0,
-                             n_years: int = 7) -> tuple[float, list[float]]:
-    """Estimate the conversion ratio: Oct-Sep MY total / local MY total.
-
-    Used to back-calculate an Oct-Sep equivalent for countries (Brazil,
-    Argentina) that USDA only publishes on a local marketing-year basis.
-
-    Pairing logic
-    ─────────────
-    build_arbr_pivot labels local MYs as "YYYY/YY" using the actual calendar
-    year from the Date column (year_offset=-1):
-        local "2023/24" = Mar 2024 – Feb 2025  (non-prev months: calendar yr-1;
-                                                  prev months Jan/Feb: calendar yr-2)
-    build_pivot labels Oct-Sep MYs as "YYYY" from the MarketYear column:
-        "2023"           = Oct 2023 – Sep 2024
-
-    Of the 12 months in local "2023/24", 7 (Mar–Sep 2024) fall in Oct-Sep "2023"
-    and 5 (Oct 2024–Feb 2025) fall in Oct-Sep "2024".  Because the bulk of
-    Southern-Hemisphere corn exports happen Apr–Sep, local "Y/Y+1" is dominated
-    by Oct-Sep "Y" → we pair them by extracting the leading 4-digit year.
-
-    Returns
-    ───────
-    (avg_ratio, [individual ratios]) — avg_ratio ≈ 1.0 on average but captures
-    crop-size variability between successive local MYs.
-    """
-    oct_sep_pivot, oct_sep_years = build_pivot(df, comp)
-    local_pivot, local_years     = build_arbr_pivot(
-        df, comp,
-        months_list=cfg["arbr_months"],
-        prev_months=cfg["arbr_prev_months"],
-    )
-
-    if use_bushels:
-        oct_sep_pivot = _apply_unit(oct_sep_pivot, unit_factor)
-        local_pivot   = _apply_unit(local_pivot,   unit_factor)
-
-    oct_sep_complete = set(get_complete_years(oct_sep_pivot, "Sep"))
-    local_complete   = set(get_complete_years(local_pivot, cfg["arbr_last_month"]))
-
-    ratios: list[float] = []
-    for local_yr in sorted(local_complete)[-n_years:]:
-        # Pair local "YYYY/YY" → Oct-Sep "YYYY"
-        oct_sep_yr = local_yr[:4]
-        if oct_sep_yr not in oct_sep_complete:
-            continue
-        local_total   = sum(local_pivot[m].get(local_yr, 0) or 0
-                            for m in cfg["arbr_months"])
-        oct_sep_total = sum(oct_sep_pivot[m].get(oct_sep_yr, 0) or 0
-                            for m in OCT_SEP_MONTHS)
-        if local_total > 0 and oct_sep_total > 0:
-            ratios.append(oct_sep_total / local_total)
-
-    if not ratios:
-        return 1.0, []
-
-    avg = float(np.mean(sorted(ratios)[1:-1])) if len(ratios) >= 4 else float(np.mean(ratios))
-    return avg, ratios
-
-
 def _compute_seasonal_shares(monthly_pivot: dict, complete_years: list,
                               months: list) -> dict:
     """Compute robust monthly share distributions from complete historical years.
@@ -2628,9 +2566,11 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     #   Oct-Sep in its supply/demand tables).
     # Wheat: aggregate forecast disabled (see wheat tab).
 
-    # Soybeans/meal: all components share Oct-Sep → auto-derive by summing.
-    # Corn: components have mixed MYs; derive Oct-Sep equivalent for AR/BR via
-    #       historical local→Oct-Sep ratio; US/Ukraine used directly.
+    # Soybeans/meal: all components share Oct-Sep → auto-derive aggregate total
+    # by summing individual country inputs.
+    # Corn: TotalNonUS/MajorExporter values are already aggregated correctly in
+    # the spreadsheet (Oct-Sep), so M1/M2 just uses a plain manual USDA input —
+    # same as any individual-country field.
     _SOY_AGGREGATE_COMPS = (
         {
             "TotalNonUS":    cfg.get("non_us_comps", []),
@@ -2638,11 +2578,6 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         }
         if commodity in ("soybeans", "soybeanmeal")
         else {}
-    )
-    _CORN_AGGREGATE_FIELDS = (
-        {"TotalNonUS", "MajorExporter"}
-        if commodity == "corn"
-        else set()
     )
     _model_legend_html = (
         f'<div style="padding:10px 0;font-family:Arial;font-size:12px;color:#8a9aaa;">'
@@ -2713,142 +2648,6 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
                 st.markdown(_model_legend_html, unsafe_allow_html=True)
 
         usda_total = derived_total if derived_total > 0 else None
-
-    elif field in _CORN_AGGREGATE_FIELDS:
-        # ── Corn: ratio-based Oct-Sep derivation for AR/BR + direct for US/UKR ─
-        # USDA publishes Brazil/Argentina on local MY (Mar-Feb) only.  We convert
-        # to Oct-Sep equivalent using the historical ratio:
-        #   local "Y/Y+1" (Mar Y+1 – Feb Y+2) ↔ Oct-Sep "Y" (Oct Y – Sep Y+1)
-        # because the dominant export months (Apr-Sep) fall within Oct-Sep "Y".
-        # Ratio ≈ 1.0 on average; deviates when successive crops differ in size.
-        _agg_comp_fields  = (cfg.get("non_us_comps", []) if field == "TotalNonUS"
-                              else cfg.get("major_comps", []))
-        _agg_mar_feb      = cfg.get("mar_feb_fields", set())
-        _agg_comp_rows:   list[tuple] = []   # (label, local_input, ratio, oct_sep_est)
-        _agg_missing:     list[str] = []
-        _agg_derived_total = 0.0
-
-        for _comp in _agg_comp_fields:
-            _clabel = FIELDS.get(_comp, _comp)
-
-            if _comp in _agg_mar_feb:
-                # ── Local MY → Oct-Sep conversion ──────────────────────────
-                # Read the local MY USDA input
-                _local_key  = f"{pfx}_{_comp}_local_usda_input"
-                _local_val  = None
-                if _local_key in st.session_state and float(st.session_state[_local_key]) > 0:
-                    _local_val = float(st.session_state[_local_key])
-                else:
-                    _ls = forecast_cfg.get((commodity, f"{_comp}_Local"))
-                    if _ls:
-                        _lv = float(_ls) * unit_factor if use_bushels else float(_ls)
-                        if _lv > 0:
-                            _local_val = _lv
-
-                if _local_val is None:
-                    _agg_missing.append(_clabel)
-                    continue
-
-                # Compute historical Oct-Sep / local ratio from actual data
-                try:
-                    _ratio, _ratio_list = _local_to_oct_sep_ratio(
-                        df, _comp, cfg, use_bushels, unit_factor
-                    )
-                except Exception:
-                    _ratio, _ratio_list = 1.0, []
-
-                _oct_sep_est = _local_val * _ratio
-                _agg_derived_total += _oct_sep_est
-                _agg_comp_rows.append((_clabel, _local_val, _ratio, _oct_sep_est))
-
-            else:
-                # ── Direct Oct-Sep input (US, Ukraine) ─────────────────────
-                _std_key = f"{pfx}_{_comp}_usda_input"
-                _std_val = None
-                if _std_key in st.session_state and float(st.session_state[_std_key]) > 0:
-                    _std_val = float(st.session_state[_std_key])
-                else:
-                    _ss = forecast_cfg.get((commodity, _comp))
-                    if _ss:
-                        _sv = float(_ss) * unit_factor if use_bushels else float(_ss)
-                        if _sv > 0:
-                            _std_val = _sv
-
-                if _std_val is None:
-                    _agg_missing.append(_clabel)
-                    continue
-
-                _agg_derived_total += _std_val
-                _agg_comp_rows.append((_clabel, None, None, _std_val))
-
-        with st.expander(
-            f"📈  USDA MY Forecast — {field_label} (Oct–Sep Derived)",
-            expanded=_agg_derived_total > 0,
-        ):
-            _ca1, _ca2 = st.columns([3, 2])
-            with _ca1:
-                if _agg_comp_rows:
-                    # Build table showing methodology per component
-                    _hdr = (
-                        f'<tr style="color:#8a9aaa;font-size:11px;">'
-                        f'<th style="text-align:left;padding:2px 8px 4px 0;">Country</th>'
-                        f'<th style="text-align:right;padding:2px 8px 4px 0;">Local USDA</th>'
-                        f'<th style="text-align:right;padding:2px 8px 4px 0;">Ratio</th>'
-                        f'<th style="text-align:right;padding:2px 0 4px 0;">Oct-Sep Est</th>'
-                        f'</tr>'
-                    )
-                    _body = ""
-                    for _clabel, _lv, _r, _est in _agg_comp_rows:
-                        if _lv is not None:
-                            # Local MY country — show conversion
-                            _body += (
-                                f'<tr>'
-                                f'<td style="padding:2px 8px 2px 0;color:#aab4c0;">{_clabel}</td>'
-                                f'<td style="text-align:right;padding:2px 8px 2px 0;color:#ccc;">{_lv:,.0f}</td>'
-                                f'<td style="text-align:right;padding:2px 8px 2px 0;color:#8a9aaa;">{_r:.3f}</td>'
-                                f'<td style="text-align:right;color:#fff;font-weight:600;">{_est:,.0f}</td>'
-                                f'</tr>'
-                            )
-                        else:
-                            # Direct Oct-Sep country
-                            _body += (
-                                f'<tr>'
-                                f'<td style="padding:2px 8px 2px 0;color:#aab4c0;">{_clabel}</td>'
-                                f'<td style="text-align:right;padding:2px 8px 2px 0;color:#555;" colspan="2">Oct–Sep (direct)</td>'
-                                f'<td style="text-align:right;color:#fff;font-weight:600;">{_est:,.0f}</td>'
-                                f'</tr>'
-                            )
-                    _miss_note = (
-                        f'<div style="color:#e57373;font-size:11px;margin-top:5px;">'
-                        f'⚠ Missing inputs for: {", ".join(_agg_missing)}</div>'
-                        if _agg_missing else ""
-                    )
-                    st.markdown(
-                        f'<div style="font-family:Arial;font-size:12px;">'
-                        f'<b style="color:#8a9aaa;">Oct–Sep equivalent ({unit_short}) — ratio method:</b>'
-                        f'<table style="margin-top:5px;border-collapse:collapse;width:100%;">'
-                        f'{_hdr}{_body}'
-                        f'<tr style="border-top:1px solid #444;">'
-                        f'<td colspan="3" style="padding:4px 8px 2px 0;color:#aab4c0;font-weight:700;">Derived Total</td>'
-                        f'<td style="text-align:right;color:{JSA_CYAN};font-weight:700;">{_agg_derived_total:,.0f}</td>'
-                        f'</tr></table>'
-                        f'{_miss_note}'
-                        f'<span style="color:#555;font-size:11px;display:block;margin-top:4px;">'
-                        f'Ratio = 7-yr avg of Oct–Sep total ÷ local MY total for same crop. '
-                        f'Near 1.0 when successive crops are similar; diverges during crop swings.</span>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.info(
-                        "Enter local MY USDA totals on Brazil/Argentina tabs (local toggle ON) "
-                        "and Oct-Sep totals on US/Ukraine tabs to enable aggregate forecasting.",
-                        icon="ℹ️",
-                    )
-            with _ca2:
-                st.markdown(_model_legend_html, unsafe_allow_html=True)
-
-        usda_total = _agg_derived_total if _agg_derived_total > 0 else None
 
     else:
         # ── Manual USDA input (individual country / standard field) ───────

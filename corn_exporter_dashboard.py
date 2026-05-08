@@ -4116,6 +4116,27 @@ def main():
             st.cache_data.clear()
             st.toast("Data cache cleared — reloading…", icon="🔄")
             st.rerun()
+
+    # ── DEBUG: Excel diagnostics (remove when confirmed working) ─────────
+    with st.expander("🛠 Excel Debug Info", expanded=False):
+        st.write(f"**Excel path:** `{EXCEL_PATH}`")
+        st.write(f"**File exists:** {os.path.exists(EXCEL_PATH)}")
+        try:
+            _xf = pd.ExcelFile(EXCEL_PATH)
+            st.write(f"**Sheets found:** {_xf.sheet_names}")
+        except Exception as _xe:
+            st.error(f"Cannot open Excel file: {_xe}")
+        # Forecast sheet raw read
+        try:
+            _fdf = pd.read_excel(EXCEL_PATH, sheet_name="Forecast", header=0)
+            st.write("**Forecast sheet columns:**", list(_fdf.columns))
+            st.dataframe(_fdf, use_container_width=True)
+        except Exception as _fe:
+            st.error(f"Forecast sheet error: {_fe}")
+        # Parsed forecast_cfg
+        _dbg_cfg = load_forecast_config()
+        st.write(f"**Parsed forecast_cfg ({len(_dbg_cfg)} entries):**")
+        st.write({str(k): v for k, v in _dbg_cfg.items()})
     with col_toggle:
         use_bushels = st.toggle(
             "📐 Million Bushels (Mbu)",

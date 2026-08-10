@@ -1065,17 +1065,23 @@ _TABLE_CSS = """
 </style>
 """
 
-def _show_table(pivot: pd.DataFrame, html: str, key: str) -> None:
+def _show_table(pivot, html: str, key: str) -> None:
     """Render a styled HTML table with a CSV download button above it."""
     btn_col, _ = st.columns([1, 6])
     with btn_col:
-        st.download_button(
-            "⬇ CSV",
-            data=pivot.to_csv(),
-            file_name=f"{key}.csv",
-            mime="text/csv",
-            key=f"dl_{key}",
-        )
+        try:
+            # pivot is {month: {year: value}} — transpose so years are columns
+            csv_data = pd.DataFrame(pivot).T.to_csv(index_label="Month")
+        except Exception:
+            csv_data = ""
+        if csv_data:
+            st.download_button(
+                "⬇ CSV",
+                data=csv_data,
+                file_name=f"{key}.csv",
+                mime="text/csv",
+                key=f"dl_{key}",
+            )
     st.markdown(html, unsafe_allow_html=True)
 
 

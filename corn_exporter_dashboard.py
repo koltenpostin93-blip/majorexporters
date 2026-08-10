@@ -4405,7 +4405,7 @@ def _run_export_inspections_tab():
     all_carriers = sorted(df_my_full["carrier"].dropna().unique().tolist())
     all_weeks    = sorted(df_my_full["week"].dropna().unique().tolist())
 
-    with st.expander("🔽  Filters", expanded=False):
+    with st.expander("🔽  Filters", expanded=True):
         fa, fb, fc = st.columns(3)
         with fa:
             sel_dests = st.multiselect(
@@ -4871,7 +4871,7 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
     }
 
     # ── Filter panel ──────────────────────────────────────────────────────────
-    with st.expander("🔽  Filters", expanded=False):
+    with st.expander("🔽  Filters", expanded=True):
         fa, fb = st.columns([3, 2])
         with fa:
             sel_countries = st.multiselect(

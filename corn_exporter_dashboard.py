@@ -21,6 +21,9 @@ import base64
 import os
 import shutil
 import tempfile
+import urllib.parse
+import ssl
+import json
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PATHS
@@ -55,6 +58,10 @@ JSA_MID   = "#2a2f35"
 # MONTH LISTS
 # ─────────────────────────────────────────────────────────────────────────────
 OCT_SEP_MONTHS = ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
+_MO_ABB = {
+    "01":"Jan","02":"Feb","03":"Mar","04":"Apr","05":"May","06":"Jun",
+    "07":"Jul","08":"Aug","09":"Sep","10":"Oct","11":"Nov","12":"Dec",
+}
 MAR_FEB_MONTHS = ["Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb"]
 APR_MAR_MONTHS = ["Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar"]
 SEP_AUG_MONTHS = ["Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug"]
@@ -474,6 +481,10 @@ def load_data(commodity: str) -> pd.DataFrame:
     for col in cfg["numeric_cols"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = _enforce_aggregate_completeness(df, cfg)
+    # Fill any NaN US values from Census GATS + FGIS auto-feed
+    df = _apply_us_auto(df, commodity)
+    # Recompute aggregates in case US was filled in (MajorExporter includes US)
     return _enforce_aggregate_completeness(df, cfg)
 
 
@@ -573,6 +584,184 @@ def load_forecast_config() -> dict:
         return result
     except Exception:
         return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# US EXPORT DATA — Census GATS + FGIS Inspections (auto-fill for US column)
+# ─────────────────────────────────────────────────────────────────────────────
+# Primary: U.S. Census Bureau International Trade API (official GATS monthly data)
+#   Endpoint: https://api.census.gov/data/timeseries/intltrade/exports/hs
+#   No CTY_CODE in GET → returns world-aggregate totals per HS10 code.
+# Extension: USDA FGIS grain inspections via Socrata (no key needed).
+#   Used to fill months not yet published in Census (approx. 6–8 wk lag).
+# When the Excel file already has US data for a month, it takes precedence.
+
+CENSUS_API_KEY = "e92f7717c349de7f48c07ecb27af5cc1fea15121"
+
+# Schedule B HS10 codes, confirmed from api.census.gov
+# Unit "T" = metric tons; "KG" = kilograms (÷1000 → MT)
+_CENSUS_HS10 = {
+    "corn": [
+        ("1005902020", "T"), ("1005902030", "T"), ("1005902035", "T"),
+        ("1005902045", "T"), ("1005902070", "T"), ("1005904055", "T"),
+        ("1005904065", "T"),
+        ("1005100010", "KG"), ("1005100090", "KG"), ("1005904049", "KG"),
+    ],
+    "soybeans": [
+        ("1201900095", "T"),
+        ("1201100000", "KG"), ("1201900005", "KG"),
+    ],
+    "soybeanmeal": [
+        ("2304000000", "KG"),
+    ],
+    "wheat": [
+        ("1001190000", "T"), ("1001992015", "T"), ("1001992055", "T"),
+        ("1001110000", "KG"), ("1001910000", "KG"),
+    ],
+}
+
+_SOCRATA_HOST  = "agtransport.usda.gov"
+_SOCRATA_PATH  = "/resource/sruw-w49i.json"
+_SOCRATA_GRAIN = {
+    "corn":     "CORN",
+    "soybeans": "SOYBEANS",
+    "wheat":    "WHEAT",
+}
+
+
+@st.cache_data(ttl=86_400, show_spinner=False)
+def _load_census_gats(commodity: str) -> pd.DataFrame:
+    """World-total monthly US exports from Census HS10 codes → DataFrame(year,month,tmt)."""
+    import http.client
+    codes = _CENSUS_HS10.get(commodity)
+    if not codes or not CENSUS_API_KEY:
+        return pd.DataFrame()
+    start_yr = 2010
+    end_yr   = pd.Timestamp.now().year
+    mt_by_ym: dict = {}
+    for code, _unit in codes:
+        params = urllib.parse.urlencode({
+            "get":       "E_COMMODITY,QTY_1_MO,UNIT_QY1",
+            "COMM_LVL":  "HS10",
+            "E_COMMODITY": code,
+            "time":      f"from {start_yr}-01 to {end_yr}-12",
+            "key":       CENSUS_API_KEY,
+        })
+        try:
+            ctx  = ssl.create_default_context()
+            conn = http.client.HTTPSConnection("api.census.gov", 443, context=ctx, timeout=25)
+            conn.request("GET",
+                f"/data/timeseries/intltrade/exports/hs?{params}",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
+                         "Connection": "close"})
+            resp = conn.getresponse()
+            body = resp.read(500_000).decode("utf-8", errors="ignore")
+            conn.close()
+            if resp.status != 200 or body.strip().startswith("<"):
+                continue
+            rows = json.loads(body)
+            h        = rows[0]
+            qty_idx  = h.index("QTY_1_MO")
+            unit_idx = h.index("UNIT_QY1")
+            time_idx = h.index("time")
+            for row in rows[1:]:
+                q = row[qty_idx]
+                if q in (None, "null", "", "0"):
+                    continue
+                q    = float(q)
+                if q <= 0:
+                    continue
+                unit = row[unit_idx]
+                mt   = q if unit == "T" else q / 1000.0
+                ts   = row[time_idx]
+                parts = ts.split("-")
+                if len(parts) < 2:
+                    continue
+                key = (int(parts[0]), int(parts[1]))
+                mt_by_ym[key] = mt_by_ym.get(key, 0.0) + mt
+        except Exception:
+            continue
+    if not mt_by_ym:
+        return pd.DataFrame()
+    out = []
+    for (yr, mo), mt in sorted(mt_by_ym.items()):
+        mo_str = f"{mo:02d}"
+        mo_abb = _MO_ABB.get(mo_str)
+        if not mo_abb:
+            continue
+        out.append({"year": yr, "month": mo, "tmt": mt / 1000.0})
+    return pd.DataFrame(out) if out else pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_fgis_inspections(commodity: str) -> pd.DataFrame:
+    """USDA FGIS grain inspections via Socrata → DataFrame(year,month,tmt). No key needed."""
+    import http.client
+    grain = _SOCRATA_GRAIN.get(commodity)
+    if not grain:
+        return pd.DataFrame()
+    try:
+        params = urllib.parse.urlencode({
+            "$select": "year,month,sum(mt) as total_mt",
+            "$where":  f"grain='{grain}'",
+            "$group":  "year,month",
+            "$limit":  "600",
+        })
+        ctx  = ssl.create_default_context()
+        conn = http.client.HTTPSConnection(_SOCRATA_HOST, 443, context=ctx, timeout=15)
+        conn.request("GET", f"{_SOCRATA_PATH}?{params}",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
+                     "Connection": "close"})
+        resp = conn.getresponse()
+        body = resp.read(200_000)
+        conn.close()
+        if resp.status != 200:
+            return pd.DataFrame()
+        rows = json.loads(body.decode("utf-8"))
+        out  = [{"year": int(r["year"]), "month": int(r["month"]),
+                 "tmt": float(r["total_mt"]) / 1000}
+                for r in rows]
+        return pd.DataFrame(out) if out else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_us_auto(commodity: str) -> dict:
+    """Blended GATS + FGIS US monthly exports → {(year, month): tmt}.
+
+    GATS wins over FGIS for the same month; FGIS extends into the lag window.
+    Used by load_data() to fill NaN US cells not yet in the Excel file.
+    """
+    records: dict = {}
+    fgis_df = _load_fgis_inspections(commodity)
+    for _, row in fgis_df.iterrows():
+        records[(int(row["year"]), int(row["month"]))] = float(row["tmt"])
+    gats_df = _load_census_gats(commodity)
+    for _, row in gats_df.iterrows():
+        records[(int(row["year"]), int(row["month"]))] = float(row["tmt"])
+    return records
+
+
+def _apply_us_auto(df: pd.DataFrame, commodity: str) -> pd.DataFrame:
+    """Fill any NaN US cells in df using GATS + FGIS auto-data."""
+    if "US" not in df.columns:
+        return df
+    us_auto = _load_us_auto(commodity)
+    if not us_auto:
+        return df
+    df = df.copy()
+    for i, row in df.iterrows():
+        if pd.isna(row.get("US")):
+            try:
+                yr = int(row["Date"].year)
+                mo = int(row["Date"].month)
+                v  = us_auto.get((yr, mo))
+                if v is not None:
+                    df.at[i, "US"] = v
+            except Exception:
+                pass
+    return df
 
 
 def _compute_seasonal_shares(monthly_pivot: dict, complete_years: list,
@@ -4117,26 +4306,6 @@ def main():
             st.toast("Data cache cleared — reloading…", icon="🔄")
             st.rerun()
 
-    # ── DEBUG: Excel diagnostics (remove when confirmed working) ─────────
-    with st.expander("🛠 Excel Debug Info", expanded=False):
-        st.write(f"**Excel path:** `{EXCEL_PATH}`")
-        st.write(f"**File exists:** {os.path.exists(EXCEL_PATH)}")
-        try:
-            _xf = pd.ExcelFile(EXCEL_PATH)
-            st.write(f"**Sheets found:** {_xf.sheet_names}")
-        except Exception as _xe:
-            st.error(f"Cannot open Excel file: {_xe}")
-        # Forecast sheet raw read
-        try:
-            _fdf = pd.read_excel(EXCEL_PATH, sheet_name="Forecast", header=0)
-            st.write("**Forecast sheet columns:**", list(_fdf.columns))
-            st.dataframe(_fdf, use_container_width=True)
-        except Exception as _fe:
-            st.error(f"Forecast sheet error: {_fe}")
-        # Parsed forecast_cfg
-        _dbg_cfg = load_forecast_config()
-        st.write(f"**Parsed forecast_cfg ({len(_dbg_cfg)} entries):**")
-        st.write({str(k): v for k, v in _dbg_cfg.items()})
     with col_toggle:
         use_bushels = st.toggle(
             "📐 Million Bushels (Mbu)",

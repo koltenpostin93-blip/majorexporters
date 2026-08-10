@@ -10,7 +10,9 @@ Marketing Year conventions:
   Oct–Sep : US, Ukraine, Total Non-US, Major Exporters, China Imports
   Mar–Feb : Argentina, Brazil
 
-Data source: Corn Exporter Dashboard Data.xlsx
+Data sources:
+  US  — U.S. Census Bureau GATS (HS10) + USDA FGIS inspections (Socrata)
+  Non-US — Trade Data Monitor (TDM) monthly export API
 """
 
 import streamlit as st
@@ -19,8 +21,6 @@ import numpy as np
 import plotly.graph_objects as go
 import base64
 import os
-import shutil
-import tempfile
 import urllib.parse
 import ssl
 import json
@@ -41,7 +41,6 @@ def _find(filename: str) -> str:
         return local
     return os.path.join(DASHBOARD_DIR, filename)
 
-EXCEL_PATH      = _find("Corn Exporter Dashboard Data.xlsx")
 LOGO_FULL_PATH  = _find("jsa_logo_full.png")
 LOGO_WHITE_PATH = _find("jsa_logo_white.png")
 
@@ -402,89 +401,51 @@ def _add_chart_watermark(fig: go.Figure, logo_b64: str | None) -> go.Figure:
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADING
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_data(commodity: str) -> pd.DataFrame:
-    cfg = COMMODITY_CONFIG[commodity]
+    """Build monthly export DataFrame from APIs (Census GATS/FGIS for US; TDM for non-US)."""
+    cfg  = COMMODITY_CONFIG[commodity]
+    now  = pd.Timestamp.now().replace(day=1)
+    dates = pd.date_range("2010-01-01", now, freq="MS")
+    df = pd.DataFrame({"Date": dates})
+    df["Month"] = df["Date"].dt.strftime("%b")
 
-    # Copy to a temp file first so a locked/open Excel workbook on Windows
-    # doesn't cause a PermissionError or a stale read.
-    tmp_path = None
-    try:
-        tmp_path = tempfile.mktemp(suffix=".xlsx")
-        shutil.copy2(EXCEL_PATH, tmp_path)
-        read_path = tmp_path
-    except Exception:
-        read_path = EXCEL_PATH   # fall back to reading directly
-
-    try:
-        df = pd.read_excel(read_path, sheet_name=cfg["sheet"], header=0)
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-    # For wheat, map whatever header names are in the Excel to our internal
-    # field names, then keep only recognised columns.
-    # For other commodities use the exact positional slice as before.
+    # Marketing year label
     if commodity == "wheat":
-        _WHEAT_HEADER_MAP = {
-            # Date / Month
-            "Date": "Date", "Month": "Month",
-            "MarketYear": "MarketYear", "Market Year": "MarketYear",
-            # United States
-            "US": "US", "U.S.": "US", "United States": "US", "USA": "US",
-            # Canada
-            "Canada": "Canada",
-            # EU
-            "EU": "EU", "E.U.": "EU", "European Union": "EU", "Euro Union": "EU",
-            # Russia
-            "Russia": "Russia", "Russian Federation": "Russia",
-            # Ukraine
-            "Ukraine": "Ukraine",
-            # India
-            "India": "India",
-            # China
-            "China": "China", "China (Mainland)": "China",
-            # Argentina
-            "Argentina": "Argentina",
-            # Australia
-            "Australia": "Australia",
-            # Brazil
-            "Brazil": "Brazil",
-            # Aggregates
-            "TotalNonUS": "TotalNonUS", "Total Non-US": "TotalNonUS",
-            "Total Non US": "TotalNonUS", "Non-US Total": "TotalNonUS",
-            "MajorExporter": "MajorExporter", "Major Exporters": "MajorExporter",
-            "Major Exporter": "MajorExporter",
-        }
-        df = df.rename(columns=_WHEAT_HEADER_MAP)
-        keep = [c for c in cfg["col_names"] if c in df.columns]
-        df   = df[keep].copy()
+        df["MarketYear"] = df["Date"].apply(
+            lambda d: f"{d.year}/{str(d.year+1)[-2:]}" if d.month >= 7
+                      else f"{d.year-1}/{str(d.year)[-2:]}"
+        )
     else:
-        n   = len(cfg["col_names"])
-        df  = df.iloc[:, :n].copy()
-        df.columns = cfg["col_names"]
+        df["MarketYear"] = df["Date"].apply(
+            lambda d: f"{d.year}/{str(d.year+1)[-2:]}" if d.month >= 10
+                      else f"{d.year-1}/{str(d.year)[-2:]}"
+        )
 
-    if "MarketYear" in df.columns:
-        df["MarketYear"] = df["MarketYear"].astype(str).str.strip()
-    df["Month"] = df["Month"].astype(str).str.strip()
-    # Normalise full month names → 3-letter abbreviations (e.g. "January" → "Jan")
-    _FULL_TO_ABB = {
-        "January":"Jan","February":"Feb","March":"Mar","April":"Apr",
-        "May":"May","June":"Jun","July":"Jul","August":"Aug",
-        "September":"Sep","October":"Oct","November":"Nov","December":"Dec",
-    }
-    df["Month"] = df["Month"].replace(_FULL_TO_ABB)
-    df["Date"]       = pd.to_datetime(df["Date"], errors="coerce")
-    df = df[df["Month"].isin(ALL_MONTHS)].copy()
+    # US: Census GATS (official, ~6-8 wk lag) + FGIS inspections (forward fill)
+    us_data = _load_us_auto(commodity)
+    df["US"] = df.apply(lambda r: us_data.get((r["Date"].year, r["Date"].month)), axis=1)
+
+    # Non-US: TDM monthly export API
+    try:
+        pwd = st.secrets["TDM_PASSWORD"]
+    except Exception:
+        pwd = ""
+    for field, (reporter, prod) in _TDM_REPORTERS.get(commodity, {}).items():
+        if pwd:
+            country_data = _fetch_tdm_exports_cached(reporter, prod, pwd)
+            df[field] = df.apply(
+                lambda r, d=country_data: d.get((r["Date"].year, r["Date"].month)), axis=1
+            )
+        else:
+            df[field] = np.nan
+
+    # Ensure every expected column exists
     for col in cfg["numeric_cols"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = _enforce_aggregate_completeness(df, cfg)
-    # Fill any NaN US values from Census GATS + FGIS auto-feed
-    df = _apply_us_auto(df, commodity)
-    # Recompute aggregates in case US was filled in (MajorExporter includes US)
+        if col not in df.columns:
+            df[col] = np.nan
+
+    df = df[df["Month"].isin(ALL_MONTHS)].copy()
     return _enforce_aggregate_completeness(df, cfg)
 
 
@@ -521,23 +482,8 @@ _FULL_MONTH_TO_ABB = {
 
 @st.cache_data(show_spinner=False)
 def load_cutoff_config() -> dict[str, str]:
-    """Read the Config sheet → {field: last_official_month (3-letter abbrev)}.
-    Accepts full month names ('March') or abbreviations ('Mar').
-    Returns {} if Config sheet is missing or unreadable."""
-    try:
-        df = pd.read_excel(EXCEL_PATH, sheet_name="Config", header=0)
-        result = {}
-        for _, row in df.iterrows():
-            country = str(row.get("Country", "")).strip()
-            month   = str(row.get("Last_Official_Month", "")).strip()
-            if not country or not month or month.lower() in ("", "nan"):
-                continue
-            # Normalise to 3-letter abbreviation
-            abb = _FULL_MONTH_TO_ABB.get(month.lower(), month[:3].capitalize())
-            result[country] = abb
-        return result
-    except Exception:
-        return {}
+    """All data sourced from official APIs — no estimate cutoffs needed."""
+    return {}
 
 
 def _cy_estimate_months(field: str, cutoffs: dict[str, str],
@@ -554,36 +500,29 @@ def _cy_estimate_months(field: str, cutoffs: dict[str, str],
 # ─────────────────────────────────────────────────────────────────────────────
 # FORECAST CONFIG & MODELS
 # ─────────────────────────────────────────────────────────────────────────────
-_FORECAST_COMMODITY_MAP = {
-    "corn": "corn", "Corn": "corn",
-    "soybeans": "soybeans", "Soybeans": "soybeans",
-    "soybeanmeal": "soybeanmeal", "SoybeanMeal": "soybeanmeal",
-    "soybean meal": "soybeanmeal", "Soybean Meal": "soybeanmeal",
-    "wheat": "wheat", "Wheat": "wheat",
+# USDA marketing-year total export forecasts (TMT). Update monthly after WASDE.
+_FORECAST_CONFIG = {
+    ("corn",        "US"):            83824,
+    ("corn",        "Brazil"):        43000,
+    ("corn",        "Argentina"):     37000,
+    ("corn",        "Ukraine"):       22000,
+    ("soybeans",    "US"):            41912,
+    ("soybeans",    "Brazil"):       115000,
+    ("soybeans",    "Argentina"):      4600,
+    ("soybeanmeal", "US"):            17599,
+    ("soybeanmeal", "Brazil"):        25500,
+    ("soybeanmeal", "Argentina"):     29400,
+    ("wheat",       "US"):            24494,
+    ("wheat",       "Canada"):        29000,
+    ("wheat",       "EU"):            30500,
+    ("wheat",       "Russia"):        44500,
+    ("wheat",       "Ukraine"):       12500,
+    ("wheat",       "Argentina"):     19500,
+    ("wheat",       "Australia"):     26500,
 }
 
-@st.cache_data(ttl=300, show_spinner=False)
 def load_forecast_config() -> dict:
-    """Read Forecast sheet → {(commodity_key, country_field): usda_total_tmt}.
-    Returns {} if sheet is missing or all values are blank."""
-    try:
-        df = pd.read_excel(EXCEL_PATH, sheet_name="Forecast", header=0)
-        result = {}
-        for _, row in df.iterrows():
-            comm    = _FORECAST_COMMODITY_MAP.get(str(row.get("Commodity", "")).strip(), "")
-            country = str(row.get("Country", "")).strip()
-            val     = row.get("USDA_MY_Total_TMT", None)
-            if not comm or not country:
-                continue
-            try:
-                fval = float(val)
-                if fval > 0:
-                    result[(comm, country)] = fval
-            except (ValueError, TypeError):
-                pass
-        return result
-    except Exception:
-        return {}
+    return dict(_FORECAST_CONFIG)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -729,9 +668,7 @@ def _load_fgis_inspections(commodity: str) -> pd.DataFrame:
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_us_auto(commodity: str) -> dict:
     """Blended GATS + FGIS US monthly exports → {(year, month): tmt}.
-
-    GATS wins over FGIS for the same month; FGIS extends into the lag window.
-    Used by load_data() to fill NaN US cells not yet in the Excel file.
+    GATS is primary (official, ~6-8 wk lag); FGIS extends forward for recent months.
     """
     records: dict = {}
     fgis_df = _load_fgis_inspections(commodity)
@@ -741,27 +678,6 @@ def _load_us_auto(commodity: str) -> dict:
     for _, row in gats_df.iterrows():
         records[(int(row["year"]), int(row["month"]))] = float(row["tmt"])
     return records
-
-
-def _apply_us_auto(df: pd.DataFrame, commodity: str) -> pd.DataFrame:
-    """Fill any NaN US cells in df using GATS + FGIS auto-data."""
-    if "US" not in df.columns:
-        return df
-    us_auto = _load_us_auto(commodity)
-    if not us_auto:
-        return df
-    df = df.copy()
-    for i, row in df.iterrows():
-        if pd.isna(row.get("US")):
-            try:
-                yr = int(row["Date"].year)
-                mo = int(row["Date"].month)
-                v  = us_auto.get((yr, mo))
-                if v is not None:
-                    df.at[i, "US"] = v
-            except Exception:
-                pass
-    return df
 
 
 def _compute_seasonal_shares(monthly_pivot: dict, complete_years: list,
@@ -2520,9 +2436,6 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # ── Load data ─────────────────────────────────────────────────────────
     try:
         df = load_data(commodity)
-    except FileNotFoundError:
-        st.error(f"Excel file not found at:\n`{EXCEL_PATH}`")
-        st.stop()
     except Exception as exc:
         st.error(f"Error loading {cfg['label']} data: {exc}")
         st.stop()
@@ -3219,9 +3132,6 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     # ── Load data ────────────────────────────────────────────────────────
     try:
         df = load_data("wheat")
-    except FileNotFoundError:
-        st.error(f"Excel file not found at:\n`{EXCEL_PATH}`")
-        st.stop()
     except Exception as exc:
         st.error(f"Error loading Wheat data: {exc}")
         st.stop()
@@ -3229,11 +3139,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     # Only expose fields that actually exist in the loaded dataframe
     FIELDS = {k: v for k, v in cfg["fields"].items() if k in df.columns}
 
-    # Diagnostic: if no country columns matched, show actual Excel headers
     if not FIELDS:
         st.error(
-            f"**No country columns matched.** "
-            f"Excel headers found: `{list(df.columns)}`\n\n"
+            f"**No country columns found in data.** "
+            f"Columns returned: `{list(df.columns)}`\n\n"
             f"Expected one of: `{list(cfg['fields'].keys())}`"
         )
         st.stop()
@@ -3668,6 +3577,70 @@ TDM_KEY_PARTNERS = [
     "United States", "Brazil", "Argentina", "Ukraine",
     "Russia", "Australia", "Canada",
 ]
+
+# TDM reporter → (country_code, product_code) for monthly export data by commodity
+_TDM_REPORTERS = {
+    "corn": {
+        "Brazil":    ("BR", "205719"),
+        "Argentina": ("AR", "205719"),
+        "Ukraine":   ("UA", "205719"),
+    },
+    "soybeans": {
+        "Brazil":    ("BR", "205714"),
+        "Argentina": ("AR", "205714"),
+    },
+    "soybeanmeal": {
+        "Brazil":    ("BR", "230400"),
+        "Argentina": ("AR", "230400"),
+    },
+    "wheat": {
+        "Canada":    ("CA", "205713"),
+        "EU":        ("EU", "205713"),
+        "Russia":    ("RU", "205713"),
+        "Ukraine":   ("UA", "205713"),
+        "India":     ("IN", "205713"),
+        "China":     ("CN", "205713"),
+        "Argentina": ("AR", "205713"),
+        "Australia": ("AU", "205713"),
+        "Brazil":    ("BR", "205713"),
+    },
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_tdm_exports_cached(reporter: str, product_code: str, password: str) -> dict:
+    """Monthly exports from TDM for one reporter country → {(year, month): tmt}."""
+    import urllib.request
+    now        = pd.Timestamp.now()
+    period_end = f"{now.year}{now.month:02d}"
+    url = (
+        f"{TDM_BASE}?username={TDM_USER}&password={password}"
+        f"&reporter={reporter}&periodBegin=201001&periodEnd={period_end}"
+        f"&flow=E&partners=All&frequency=M&productCode={product_code}"
+        f"&levelDetail=6&levelDetailGroup=P&currency=USD&includeUnits=UNIT1"
+        f"&isoCountryCode=NONE&conv=1&separator=T&includeFlow=Y"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            raw = r.read()
+        data  = raw.decode("utf-16")
+        lines = [l for l in data.strip().split("\n") if l.strip()]
+        if len(lines) < 2:
+            return {}
+        header = lines[0].split("\t")
+        rows   = [l.split("\t") for l in lines[1:]]
+        df = pd.DataFrame(rows, columns=header)
+        df["YEAR"]  = pd.to_numeric(df["YEAR"],  errors="coerce")
+        df["MONTH"] = pd.to_numeric(df["MONTH"], errors="coerce")
+        df["QTY1"]  = pd.to_numeric(df["QTY1"],  errors="coerce")
+        df = df.dropna(subset=["YEAR", "MONTH", "QTY1"])
+        result: dict = {}
+        for _, row in df.iterrows():
+            key = (int(row["YEAR"]), int(row["MONTH"]))
+            result[key] = result.get(key, 0.0) + float(row["QTY1"]) / 1000
+        return result
+    except Exception:
+        return {}
 
 # Consistent colors per partner
 _PARTNER_COLORS = {
@@ -4319,8 +4292,8 @@ def main():
         )
     with col_note:
         st.caption(
-            "Reads live from the Excel file. After updating, "
-            "click **Refresh Data** — tables, stats, and charts update automatically."
+            "Data sourced live from Census GATS, USDA FGIS, and TDM. "
+            "Click **Refresh Data** to pull the latest figures."
         )
 
     unit_short    = "Mbu"  if use_bushels else "TMT"

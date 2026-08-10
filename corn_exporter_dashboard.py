@@ -4366,9 +4366,12 @@ def _insp_tile(label, value, sub="", delta=None, accent=None):
 
 
 def _run_export_inspections_tab():
-    """Enhanced FGIS Export Inspections tab — destination, port, carrier detail."""
+    """Enhanced FGIS Export Inspections tab — full drill-down filters."""
 
-    c1, c2, c3 = st.columns([2, 2, 4])
+    _DIV = '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>'
+
+    # ── Top controls ──────────────────────────────────────────────────────────
+    c1, c2 = st.columns([2, 2])
     with c1:
         grain_label = st.selectbox("Commodity", list(_INSP_GRAINS.keys()),
                                    key="insp_grain")
@@ -4394,60 +4397,128 @@ def _run_export_inspections_tab():
         my_sel_label = st.selectbox("Marketing Year", my_labels, key="insp_my")
     sel_my = all_my[my_labels.index(my_sel_label)]
 
-    # ── Filter to selected MY ─────────────────────────────────────────────────
-    df_my = df[df["my"] == sel_my].copy()
+    # ── Filter panel ──────────────────────────────────────────────────────────
+    df_my_full = df[df["my"] == sel_my].copy()
 
-    # ── Stat tiles ────────────────────────────────────────────────────────────
-    latest_week = df_my["week"].max() if not df_my.empty else None
-    latest_month_num = df_my["month"].max() if not df_my.empty else None
-    prev_week = latest_week - 1 if latest_week and latest_week > 1 else None
+    all_dests    = sorted(df_my_full["dest"].dropna().unique().tolist())
+    all_ports    = sorted(df_my_full["port_group"].dropna().unique().tolist())
+    all_carriers = sorted(df_my_full["carrier"].dropna().unique().tolist())
+    all_weeks    = sorted(df_my_full["week"].dropna().unique().tolist())
 
-    cur_wk_mt  = df_my[df_my["week"] == latest_week]["mt"].sum() / 1000 if latest_week else 0
-    prev_wk_mt = df_my[df_my["week"] == prev_week]["mt"].sum() / 1000 if prev_week else None
+    with st.expander("🔽  Filters", expanded=False):
+        fa, fb, fc = st.columns(3)
+        with fa:
+            sel_dests = st.multiselect(
+                "Destination", all_dests, default=[],
+                key="insp_dest",
+                help="Leave blank to include all destinations",
+            )
+        with fb:
+            sel_ports = st.multiselect(
+                "Port Region", all_ports, default=[],
+                key="insp_port",
+                help="Leave blank to include all port regions",
+            )
+        with fc:
+            sel_carriers = st.multiselect(
+                "Carrier Type", all_carriers, default=[],
+                key="insp_carrier",
+                help="Leave blank to include all carrier types",
+            )
+        fd, fe = st.columns(2)
+        with fd:
+            week_range = st.slider(
+                "Week Range (ISO week)",
+                min_value=int(min(all_weeks)) if all_weeks else 1,
+                max_value=int(max(all_weeks)) if all_weeks else 52,
+                value=(int(min(all_weeks)) if all_weeks else 1,
+                       int(max(all_weeks)) if all_weeks else 52),
+                key="insp_week_range",
+            )
+        with fe:
+            top_n_dests = st.slider("Top N destinations", 5, 40, 20,
+                                    key="insp_top_n")
+
+    # Apply filters
+    df_my = df_my_full.copy()
+    if sel_dests:
+        df_my = df_my[df_my["dest"].isin(sel_dests)]
+    if sel_ports:
+        df_my = df_my[df_my["port_group"].isin(sel_ports)]
+    if sel_carriers:
+        df_my = df_my[df_my["carrier"].isin(sel_carriers)]
+    df_my = df_my[(df_my["week"] >= week_range[0]) & (df_my["week"] <= week_range[1])]
+
+    active_filters = bool(sel_dests or sel_ports or sel_carriers
+                          or week_range != (min(all_weeks, default=1),
+                                            max(all_weeks, default=52)))
+    if active_filters:
+        st.caption(
+            f"Filters active — showing {len(df_my):,} rows "
+            f"({df_my['mt'].sum()/1000:,.0f} TMT)"
+        )
+
+    if df_my.empty:
+        st.warning("No data matches current filters.")
+        return
+
+    # ── Stat tiles (always from unfiltered MY for context; filtered for value) ─
+    latest_week = int(df_my_full["week"].max())
+    prev_week   = latest_week - 1 if latest_week > 1 else None
+
+    cur_wk_mt  = df_my[df_my["week"] == latest_week]["mt"].sum() / 1000
+    prev_wk_mt_raw = df_my_full[df_my_full["week"] == prev_week]["mt"].sum() / 1000 if prev_week else None
     ytd_mt     = df_my["mt"].sum() / 1000
 
-    # Prior MY YTD through same week
-    prior_my = sel_my - 1
-    df_prior = df[(df["my"] == prior_my) & (df["week"] <= (latest_week or 0))]
-    prior_ytd = df_prior["mt"].sum() / 1000 if not df_prior.empty else None
+    prior_my   = sel_my - 1
+    df_prior_full = df[(df["my"] == prior_my) & (df["week"] <= latest_week)]
+    if sel_dests:
+        df_prior_full = df_prior_full[df_prior_full["dest"].isin(sel_dests)]
+    if sel_ports:
+        df_prior_full = df_prior_full[df_prior_full["port_group"].isin(sel_ports)]
+    if sel_carriers:
+        df_prior_full = df_prior_full[df_prior_full["carrier"].isin(sel_carriers)]
+    prior_ytd = df_prior_full["mt"].sum() / 1000 if not df_prior_full.empty else None
 
-    wow_delta  = ((cur_wk_mt / prev_wk_mt - 1) * 100) if prev_wk_mt else None
-    ytd_delta  = ((ytd_mt / prior_ytd - 1) * 100) if prior_ytd else None
+    wow_delta = ((cur_wk_mt / prev_wk_mt_raw - 1) * 100) if prev_wk_mt_raw else None
+    ytd_delta = ((ytd_mt / prior_ytd - 1) * 100) if prior_ytd else None
 
-    top_dest = (
-        df_my.groupby("dest")["mt"].sum().idxmax()
-        if not df_my.empty else "—"
-    )
-    top_dest_mt = df_my.groupby("dest")["mt"].sum().max() / 1000 if not df_my.empty else 0
+    dest_totals = df_my.groupby("dest")["mt"].sum()
+    top_dest    = dest_totals.idxmax() if not dest_totals.empty else "—"
+    top_dest_mt = dest_totals.max() / 1000 if not dest_totals.empty else 0
 
     tiles_html = (
         _insp_tile("Latest Week", f"{cur_wk_mt:,.0f}", "TMT", wow_delta, JSA_CYAN) +
         _insp_tile("YTD Total", f"{ytd_mt:,.0f}", f"TMT · thru wk {latest_week}", ytd_delta, JSA_GREEN) +
         _insp_tile("Top Destination", top_dest, f"{top_dest_mt:,.0f} TMT YTD", accent="#f9a825") +
-        _insp_tile("Weeks Reported", str(int(df_my["week"].nunique())), f"MY {sel_my}/{str(sel_my+1)[-2:]}", accent="#78909c")
+        _insp_tile("Weeks in Range", str(int(df_my["week"].nunique())),
+                   f"wk {week_range[0]}–{week_range[1]}", accent="#78909c")
     )
     st.markdown(
         f'<div style="display:flex;gap:10px;margin:12px 0 18px;">{tiles_html}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:2px 0 16px;"></div>',
-        unsafe_allow_html=True,
+    st.markdown(_DIV, unsafe_allow_html=True)
+
+    # ── Monthly labels for x-axis ─────────────────────────────────────────────
+    _my_month_labels = (
+        ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"]
+        if grain_label == "Wheat"
+        else ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
     )
 
-    # ── Charts row 1: Port breakdown + Carrier breakdown ─────────────────────
+    # ── Charts row 1: Port breakdown + Carrier breakdown ──────────────────────
     col_port, col_carr = st.columns(2)
 
     with col_port:
-        st.markdown("#### Port Region Breakdown")
+        st.markdown("#### Port Region by Month")
         port_df = (
             df_my.groupby(["my_month_pos", "port_group"])["mt"]
             .sum().reset_index()
         )
         port_df["tmt"] = port_df["mt"] / 1000
-        port_groups = ["Gulf", "Pacific", "Atlantic", "Interior", "Other"]
         fig_port = go.Figure()
-        for pg in port_groups:
+        for pg in ["Gulf", "Pacific", "Atlantic", "Interior", "Other"]:
             sub = port_df[port_df["port_group"] == pg].sort_values("my_month_pos")
             if sub.empty:
                 continue
@@ -4459,17 +4530,12 @@ def _run_export_inspections_tab():
             barmode="stack",
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title="MY Month", gridcolor="#2e353d", showgrid=True,
-                       tickmode="array",
-                       tickvals=list(range(1, 13)),
-                       ticktext=["Oct","Nov","Dec","Jan","Feb","Mar",
-                                 "Apr","May","Jun","Jul","Aug","Sep"] if grain_label != "Wheat"
-                                else ["Jul","Aug","Sep","Oct","Nov","Dec",
-                                      "Jan","Feb","Mar","Apr","May","Jun"]),
+            xaxis=dict(title="MY Month", gridcolor="#2e353d",
+                       tickmode="array", tickvals=list(range(1, 13)),
+                       ticktext=_my_month_labels),
             yaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
             legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=320,
+            margin=dict(l=10, r=10, t=10, b=10), height=320,
         )
         st.plotly_chart(fig_port, use_container_width=True)
 
@@ -4492,24 +4558,22 @@ def _run_export_inspections_tab():
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#cdd9e5", size=11),
             legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=320,
+            margin=dict(l=10, r=10, t=10, b=10), height=320,
         )
         st.plotly_chart(fig_carr, use_container_width=True)
 
-    # ── Top destinations ──────────────────────────────────────────────────────
+    # ── Top destinations bar ──────────────────────────────────────────────────
     st.markdown("#### Top Destinations (YTD)")
     dest_df = (
         df_my.groupby("dest")["mt"].sum().reset_index()
         .sort_values("mt", ascending=True)
     )
     dest_df["tmt"] = dest_df["mt"] / 1000
-    top_n = dest_df.tail(25)
+    top_n = dest_df.tail(top_n_dests)
 
     fig_dest = go.Figure(go.Bar(
         x=top_n["tmt"], y=top_n["dest"],
-        orientation="h",
-        marker_color=JSA_CYAN,
+        orientation="h", marker_color=JSA_CYAN,
         text=top_n["tmt"].apply(lambda v: f"{v:,.0f}"),
         textposition="outside",
         hovertemplate="%{y}: %{x:,.0f} TMT<extra></extra>",
@@ -4524,47 +4588,93 @@ def _run_export_inspections_tab():
     )
     st.plotly_chart(fig_dest, use_container_width=True)
 
-    # ── Seasonal cumulative chart ─────────────────────────────────────────────
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:6px 0 14px;"></div>',
-        unsafe_allow_html=True,
+    # ── Destination × Port Region stacked bar ─────────────────────────────────
+    st.markdown(_DIV, unsafe_allow_html=True)
+    st.markdown("#### Destination by Port Region")
+
+    dest_port_df = (
+        df_my.groupby(["dest", "port_group"])["mt"].sum().reset_index()
     )
-    st.markdown("#### Seasonal Cumulative Weekly Inspections (All MYs)")
+    dest_port_df["tmt"] = dest_port_df["mt"] / 1000
+    # Restrict to top N dests
+    top_dest_names = (
+        dest_port_df.groupby("dest")["tmt"].sum()
+        .nlargest(top_n_dests).index.tolist()
+    )
+    dest_port_df = dest_port_df[dest_port_df["dest"].isin(top_dest_names)]
+    dest_order = (
+        dest_port_df.groupby("dest")["tmt"].sum()
+        .sort_values().index.tolist()
+    )
+
+    fig_dp = go.Figure()
+    for pg in ["Gulf", "Pacific", "Atlantic", "Interior", "Other"]:
+        sub = dest_port_df[dest_port_df["port_group"] == pg]
+        sub = sub.set_index("dest").reindex(dest_order).reset_index()
+        fig_dp.add_trace(go.Bar(
+            x=sub["tmt"], y=sub["dest"],
+            orientation="h", name=pg,
+            marker_color=_PORT_GROUP_COLORS.get(pg, "#78909c"),
+        ))
+    fig_dp.update_layout(
+        barmode="stack",
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#cdd9e5", size=11),
+        xaxis=dict(title="TMT", gridcolor="#2e353d", showgrid=True),
+        yaxis=dict(gridcolor="#2e353d", showgrid=False),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=max(320, len(dest_order) * 22),
+    )
+    st.plotly_chart(fig_dp, use_container_width=True)
+
+    # ── Seasonal cumulative chart ─────────────────────────────────────────────
+    st.markdown(_DIV, unsafe_allow_html=True)
+    st.markdown("#### Seasonal Cumulative Inspections")
 
     comp_my_opts = [f"{m}/{str(m+1)[-2:]}" for m in all_my if m != sel_my]
-    default_comp = comp_my_opts[:5]
     comp_sel = st.multiselect(
-        "Compare MYs", comp_my_opts, default=default_comp, key="insp_comp_my"
+        "Compare Marketing Years", comp_my_opts,
+        default=comp_my_opts[:5], key="insp_comp_my"
     )
     comp_starts = [int(l.split("/")[0]) for l in comp_sel]
     all_chart_my = sorted(set([sel_my] + comp_starts))
 
-    # Build cumulative weekly sums per MY
+    # Apply same dest/port/carrier filters to seasonal data too
+    df_seas = df.copy()
+    if sel_dests:
+        df_seas = df_seas[df_seas["dest"].isin(sel_dests)]
+    if sel_ports:
+        df_seas = df_seas[df_seas["port_group"].isin(sel_ports)]
+    if sel_carriers:
+        df_seas = df_seas[df_seas["carrier"].isin(sel_carriers)]
+
     wk_df = (
-        df.groupby(["my", "week"])["mt"].sum().reset_index()
+        df_seas.groupby(["my", "week"])["mt"].sum().reset_index()
+        .sort_values(["my", "week"])
     )
     wk_df["tmt"] = wk_df["mt"] / 1000
-    wk_df = wk_df.sort_values(["my", "week"])
 
+    _SEAS_PALETTE = [
+        "#0693e3","#4a6741","#f9a825","#ef5350","#ab47bc",
+        "#26c6da","#ff7043","#78909c","#a5d6a7","#ffe082",
+    ]
     fig_seas = go.Figure()
-    for my_yr in all_chart_my:
+    for idx, my_yr in enumerate(sorted(all_chart_my, reverse=True)):
         sub = wk_df[wk_df["my"] == my_yr].copy()
         if sub.empty:
             continue
         sub["cum_tmt"] = sub["tmt"].cumsum()
         is_cur = (my_yr == sel_my)
         my_lbl = f"{my_yr}/{str(my_yr+1)[-2:]}"
+        color = JSA_CYAN if is_cur else _SEAS_PALETTE[idx % len(_SEAS_PALETTE)]
         fig_seas.add_trace(go.Scatter(
             x=sub["week"], y=sub["cum_tmt"],
-            mode="lines",
-            name=my_lbl,
-            line=dict(
-                color=JSA_CYAN if is_cur else None,
-                width=2.5 if is_cur else 1.2,
-                dash="solid" if is_cur else "dot",
-            ),
-            opacity=1.0 if is_cur else 0.65,
-            hovertemplate=f"{my_lbl}<br>Week %{{x}}: %{{y:,.0f}} TMT<extra></extra>",
+            mode="lines", name=my_lbl,
+            line=dict(color=color, width=2.5 if is_cur else 1.3,
+                      dash="solid" if is_cur else "dot"),
+            opacity=1.0 if is_cur else 0.7,
+            hovertemplate=f"{my_lbl} · Wk %{{x}}: %{{y:,.0f}} TMT<extra></extra>",
         ))
     fig_seas.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -4572,21 +4682,16 @@ def _run_export_inspections_tab():
         xaxis=dict(title="ISO Week of Year", gridcolor="#2e353d", showgrid=True),
         yaxis=dict(title="Cumulative TMT", gridcolor="#2e353d", showgrid=True),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=380,
+        margin=dict(l=10, r=10, t=10, b=10), height=400,
     )
     st.plotly_chart(fig_seas, use_container_width=True)
 
-    # ── Destination × Port detail table ──────────────────────────────────────
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:6px 0 14px;"></div>',
-        unsafe_allow_html=True,
-    )
+    # ── Detail table ──────────────────────────────────────────────────────────
+    st.markdown(_DIV, unsafe_allow_html=True)
     st.markdown("#### Destination Detail Table")
     tbl_df = (
         df_my.groupby(["dest", "port_group", "carrier"])["mt"]
-        .sum().reset_index()
-        .sort_values("mt", ascending=False)
+        .sum().reset_index().sort_values("mt", ascending=False)
     )
     tbl_df["tmt"] = (tbl_df["mt"] / 1000).round(1)
     tbl_df = tbl_df.rename(columns={
@@ -4594,11 +4699,10 @@ def _run_export_inspections_tab():
         "carrier": "Carrier", "tmt": "TMT",
     })[["Destination", "Port Region", "Carrier", "TMT"]]
 
-    csv_data = tbl_df.to_csv(index=False)
     dl_col, _ = st.columns([1, 6])
     with dl_col:
         st.download_button(
-            "⬇ CSV", data=csv_data,
+            "⬇ CSV", data=tbl_df.to_csv(index=False),
             file_name=f"inspections_{grain_label}_{sel_my}.csv",
             mime="text/csv", key="dl_insp_tbl",
         )
@@ -4659,35 +4763,35 @@ def _load_esr_exports(commodity_code: int, market_year: int) -> list:
 
 
 def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
-    """Weekly Export Sales tab — USDA FAS ESR API."""
+    """Weekly Export Sales tab — USDA FAS ESR API with full drill-down filters."""
 
-    # ── Credentials / connectivity check ─────────────────────────────────────
-    with st.spinner("Loading ESR data…"):
+    _DIV = '<div style="border-top:1px solid #2e353d;margin:6px 0 16px;"></div>'
+    dec  = 1 if use_bushels else 0
+
+    # ── Connectivity check ────────────────────────────────────────────────────
+    with st.spinner("Loading ESR release dates…"):
         release_dates = _load_esr_release_dates()
-
     if not release_dates:
-        st.error(
-            "⚠️ Unable to reach the USDA FAS ESR API. "
-            "Check your internet connection or try refreshing."
-        )
+        st.error("⚠️ Unable to reach the USDA FAS ESR API. Try refreshing.")
         return
 
-    # ── Controls ──────────────────────────────────────────────────────────────
-    ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 4])
-    with ctrl1:
+    # ── Top controls: Commodity + Market Year ─────────────────────────────────
+    c1, c2 = st.columns([2, 2])
+    with c1:
         commodity = st.selectbox(
             "Commodity", list(_ESR_COMMODITIES.keys()), key="esr_commodity"
         )
     comm_code = _ESR_COMMODITIES[commodity]
     bu_factor = _ESR_BU_FACTOR.get(comm_code)
 
-    # Market years available for this commodity
-    comm_dates = [d for d in release_dates if d["commodityCode"] == comm_code]
-    comm_dates.sort(key=lambda d: d["marketYear"], reverse=True)
+    comm_dates = sorted(
+        [d for d in release_dates if d["commodityCode"] == comm_code],
+        key=lambda d: d["marketYear"], reverse=True,
+    )
     available_years = [d["marketYear"] for d in comm_dates]
     cur_my = available_years[0] if available_years else pd.Timestamp.now().year
 
-    with ctrl2:
+    with c2:
         my_opts = [
             f"Current MY ({cur_my})" if y == cur_my else str(y)
             for y in available_years
@@ -4695,22 +4799,18 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
         my_sel_label = st.selectbox("Market Year", my_opts, key="esr_my")
     sel_my_year = available_years[my_opts.index(my_sel_label)]
 
-    # ── Fetch data for selected MY + one prior ────────────────────────────────
-    with st.spinner(f"Fetching {commodity} MY {sel_my_year} export sales…"):
-        records = _load_esr_exports(comm_code, sel_my_year)
-        records_prior = _load_esr_exports(comm_code, sel_my_year - 1)
+    # ── Fetch ─────────────────────────────────────────────────────────────────
+    with st.spinner(f"Fetching {commodity} MY {sel_my_year}…"):
+        records       = _load_esr_exports(comm_code, sel_my_year)
+        country_names = _load_esr_countries()
 
     if not records:
-        st.warning(f"No ESR data returned for {commodity} MY {sel_my_year}.")
+        st.warning(f"No ESR data for {commodity} MY {sel_my_year}.")
         return
-
-    # Build country lookup
-    country_names = _load_esr_countries()
 
     def _cn(code):
         return country_names.get(code, str(code)).title()
 
-    # Parse records into DataFrame
     def _parse_esr(recs, my_year):
         rows = []
         for r in recs:
@@ -4719,74 +4819,145 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
                     "country_code": r["countryCode"],
                     "country":      _cn(r["countryCode"]),
                     "week_date":    pd.Timestamp(r["weekEndingDate"]),
-                    "net_sales":    r.get("currentMYNetSales", 0) / 1000,     # MT→TMT
+                    "net_sales":    r.get("currentMYNetSales", 0) / 1000,
                     "exports":      r.get("weeklyExports", 0) / 1000,
                     "gross_sales":  r.get("grossNewSales", 0) / 1000,
                     "outstanding":  r.get("outstandingSales", 0) / 1000,
                     "ytd_exports":  r.get("accumulatedExports", 0) / 1000,
                     "ytd_commit":   r.get("currentMYTotalCommitment", 0) / 1000,
                     "next_sales":   r.get("nextMYNetSales", 0) / 1000,
+                    "next_outstanding": r.get("nextMYOutstandingSales", 0) / 1000,
                     "my_year":      my_year,
                 })
             except Exception:
                 pass
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
-    df = _parse_esr(records, sel_my_year)
-    df_prior = _parse_esr(records_prior, sel_my_year - 1)
-
-    if df.empty:
+    df_full = _parse_esr(records, sel_my_year)
+    if df_full.empty:
         st.warning("Could not parse ESR records.")
         return
 
-    # ── Unit conversion ───────────────────────────────────────────────────────
     numeric_cols = ["net_sales","exports","gross_sales","outstanding",
-                    "ytd_exports","ytd_commit","next_sales"]
+                    "ytd_exports","ytd_commit","next_sales","next_outstanding"]
     if use_bushels and bu_factor:
-        for c in numeric_cols:
-            df[c] = df[c] * bu_factor
-            if not df_prior.empty:
-                df_prior[c] = df_prior[c] * bu_factor
+        df_full[numeric_cols] = df_full[numeric_cols] * bu_factor
 
-    # ── Identify latest week ───────────────────────────────────────────────────
-    latest_date = df["week_date"].max()
-    prev_date   = df[df["week_date"] < latest_date]["week_date"].max() if len(df["week_date"].unique()) > 1 else None
+    all_countries = sorted(df_full["country"].dropna().unique().tolist())
+    all_weeks     = sorted(df_full["week_date"].unique())
+    latest_date   = df_full["week_date"].max()
+    latest_date_str = latest_date.strftime("%b %d, %Y")
 
-    latest = df[df["week_date"] == latest_date]
-    prev   = df[df["week_date"] == prev_date] if prev_date else pd.DataFrame()
+    # ── Metric definitions ────────────────────────────────────────────────────
+    _ESR_METRICS = {
+        "Net Sales":             "net_sales",
+        "Gross Sales":           "gross_sales",
+        "Weekly Exports":        "exports",
+        "Outstanding Sales":     "outstanding",
+        "YTD Exports":           "ytd_exports",
+        "YTD Commitment":        "ytd_commit",
+        "New Crop Net Sales":    "next_sales",
+        "New Crop Outstanding":  "next_outstanding",
+    }
+    _METRIC_COLORS = {
+        "net_sales":       JSA_CYAN,
+        "gross_sales":     "#26c6da",
+        "exports":         JSA_GREEN,
+        "outstanding":     "#f9a825",
+        "ytd_exports":     "#ab47bc",
+        "ytd_commit":      "#ff7043",
+        "next_sales":      "#78909c",
+        "next_outstanding":"#a5d6a7",
+    }
 
-    # Aggregate all countries → totals
+    # ── Filter panel ──────────────────────────────────────────────────────────
+    with st.expander("🔽  Filters", expanded=False):
+        fa, fb = st.columns([3, 2])
+        with fa:
+            sel_countries = st.multiselect(
+                "Destination Country", all_countries, default=[],
+                key="esr_countries",
+                help="Leave blank to include all countries",
+            )
+        with fb:
+            top_n_dest = st.slider("Top N destinations", 5, 40, 20,
+                                   key="esr_top_n")
+
+        fc, fd = st.columns(2)
+        with fc:
+            wk_metrics = st.multiselect(
+                "Weekly chart — metrics to show",
+                list(_ESR_METRICS.keys()),
+                default=["Net Sales", "Weekly Exports"],
+                key="esr_wk_metrics",
+            )
+        with fd:
+            cum_metric_label = st.selectbox(
+                "Cumulative chart — metric",
+                ["YTD Exports", "YTD Commitment", "Net Sales", "Outstanding Sales"],
+                key="esr_cum_metric",
+            )
+
+        fe, _ = st.columns([3, 1])
+        with fe:
+            comp_my_opts = [str(y) for y in available_years if y != sel_my_year]
+            comp_my_sel = st.multiselect(
+                "Compare additional Market Years (cumulative chart)",
+                comp_my_opts,
+                default=comp_my_opts[:2],
+                key="esr_comp_my",
+            )
+
+    # Apply destination filter
+    df = df_full.copy()
+    if sel_countries:
+        df = df[df["country"].isin(sel_countries)]
+
+    if df.empty:
+        st.warning("No data matches current filters.")
+        return
+
+    # ── Latest / prior week snapshots ─────────────────────────────────────────
     def _sum(frame, col):
-        return frame[col].sum() if not frame.empty else 0.0
-
-    wk_net_sales = _sum(latest, "net_sales")
-    wk_exports   = _sum(latest, "exports")
-    wk_outstand  = _sum(latest, "outstanding")
-    wk_ytd_exp   = _sum(latest, "ytd_exports")
-
-    # Prior week for WoW delta
-    pw_net   = _sum(prev, "net_sales")
-    pw_exp   = _sum(prev, "exports")
-
-    # Prior MY same week for YoY delta
-    prior_same = df_prior[df_prior["week_date"] == latest_date]
-    py_ytd  = _sum(prior_same, "ytd_exports")
+        return float(frame[col].sum()) if not frame.empty else 0.0
 
     def _delta(cur, prev):
         return ((cur / prev - 1) * 100) if prev and prev != 0 else None
 
-    wow_net_pct = _delta(wk_net_sales, pw_net)
-    wow_exp_pct = _delta(wk_exports, pw_exp)
-    yoy_ytd_pct = _delta(wk_ytd_exp, py_ytd)
+    latest    = df[df["week_date"] == latest_date]
+    prior_dates = sorted(df["week_date"].unique())
+    prev_date   = prior_dates[-2] if len(prior_dates) >= 2 else None
+    prev        = df[df["week_date"] == prev_date] if prev_date else pd.DataFrame()
 
-    def _tile(label, val, sub="", pct=None, acc=None):
+    wk_net  = _sum(latest, "net_sales")
+    wk_exp  = _sum(latest, "exports")
+    wk_out  = _sum(latest, "outstanding")
+    wk_ytd  = _sum(latest, "ytd_exports")
+    wk_comm = _sum(latest, "ytd_commit")
+
+    pw_net  = _sum(prev, "net_sales")
+    pw_exp  = _sum(prev, "exports")
+
+    # Prior MY for YoY
+    with st.spinner(""):
+        prior_recs = _load_esr_exports(comm_code, sel_my_year - 1)
+    df_py = _parse_esr(prior_recs, sel_my_year - 1)
+    if use_bushels and bu_factor and not df_py.empty:
+        df_py[numeric_cols] = df_py[numeric_cols] * bu_factor
+    if sel_countries and not df_py.empty:
+        df_py = df_py[df_py["country"].isin(sel_countries)]
+    py_latest = df_py[df_py["week_date"] == latest_date] if not df_py.empty else pd.DataFrame()
+    py_ytd    = _sum(py_latest, "ytd_exports")
+
+    # ── Stat tiles ────────────────────────────────────────────────────────────
+    def _esr_tile(label, val, sub="", pct=None, pct_label="WoW", acc=None):
         acc = acc or JSA_CYAN
         d = ""
         if pct is not None:
             c = "#4caf50" if pct >= 0 else "#ef5350"
             s = "+" if pct >= 0 else ""
-            d = f'<div style="font-size:10px;color:{c};font-weight:700;margin-top:3px;">{s}{pct:.1f}% WoW</div>'
-        v = f"{val:,.{1 if use_bushels else 0}f}"
+            d = f'<div style="font-size:10px;color:{c};font-weight:700;margin-top:3px;">{s}{pct:.1f}% {pct_label}</div>'
+        v = f"{val:,.{dec}f}"
         return (
             f'<div style="background:#1e2124;border:1px solid #2e353d;'
             f'border-top:3px solid {acc};border-radius:6px;'
@@ -4800,174 +4971,202 @@ def _run_export_sales_tab(use_bushels=False, unit_short="TMT"):
         )
 
     tiles_html = (
-        _tile("Weekly Net Sales", wk_net_sales, unit_short, wow_net_pct, JSA_CYAN) +
-        _tile("Weekly Exports", wk_exports, unit_short, wow_exp_pct, JSA_GREEN) +
-        _tile("Outstanding Sales", wk_outstand, unit_short, acc="#f9a825") +
-        _tile("YTD Exports", wk_ytd_exp, unit_short,
-              _delta(wk_ytd_exp, py_ytd) if py_ytd else None, "#ab47bc")
+        _esr_tile("Weekly Net Sales",  wk_net,  unit_short, _delta(wk_net, pw_net), "WoW", JSA_CYAN) +
+        _esr_tile("Weekly Exports",    wk_exp,  unit_short, _delta(wk_exp, pw_exp), "WoW", JSA_GREEN) +
+        _esr_tile("Outstanding Sales", wk_out,  unit_short, acc="#f9a825") +
+        _esr_tile("YTD Exports",       wk_ytd,  unit_short, _delta(wk_ytd, py_ytd), "YoY", "#ab47bc") +
+        _esr_tile("YTD Commitment",    wk_comm, unit_short, acc="#ff7043")
     )
-    latest_date_str = latest_date.strftime("%b %d, %Y")
     st.markdown(
         f'<div style="font-size:11px;color:#5a6878;margin-bottom:8px;">'
-        f'Week ending: <b style="color:#cdd9e5;">{latest_date_str}</b>&nbsp;&nbsp;'
-        f'MY {sel_my_year} · {commodity}</div>',
+        f'Week ending: <b style="color:#cdd9e5;">{latest_date_str}</b>'
+        f'&nbsp;·&nbsp;MY {sel_my_year}&nbsp;·&nbsp;{commodity}'
+        + (f'&nbsp;·&nbsp;<span style="color:#f9a825;">Filtered: {", ".join(sel_countries[:3])}'
+           + ("…" if len(sel_countries) > 3 else "") + "</span>"
+           if sel_countries else "") +
+        f'</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
         f'<div style="display:flex;gap:10px;margin-bottom:18px;">{tiles_html}</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:2px 0 16px;"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(_DIV, unsafe_allow_html=True)
 
-    # ── Weekly time series: net sales + exports ───────────────────────────────
-    st.markdown("#### Weekly Net Sales & Exports")
+    # ── Weekly metric bar chart ───────────────────────────────────────────────
+    st.markdown("#### Weekly Metrics")
     wk_totals = (
-        df.groupby("week_date")[["net_sales", "exports"]].sum().reset_index()
+        df.groupby("week_date")[numeric_cols].sum().reset_index()
         .sort_values("week_date")
     )
 
-    fig_wk = go.Figure()
-    fig_wk.add_trace(go.Bar(
-        x=wk_totals["week_date"], y=wk_totals["net_sales"],
-        name=f"Net Sales", marker_color=JSA_CYAN,
-        hovertemplate="Week %{x|%b %d}: %{y:,.0f} " + unit_short + "<extra></extra>",
-    ))
-    fig_wk.add_trace(go.Bar(
-        x=wk_totals["week_date"], y=wk_totals["exports"],
-        name="Exports", marker_color=JSA_GREEN,
-        hovertemplate="Week %{x|%b %d}: %{y:,.0f} " + unit_short + "<extra></extra>",
-    ))
-    fig_wk.update_layout(
-        barmode="group",
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#cdd9e5", size=11),
-        xaxis=dict(title="Week Ending", gridcolor="#2e353d", showgrid=True),
-        yaxis=dict(title=unit_short, gridcolor="#2e353d", showgrid=True),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=340,
-    )
-    st.plotly_chart(fig_wk, use_container_width=True)
-
-    # ── Cumulative exports vs prior MY ────────────────────────────────────────
-    st.markdown("#### Cumulative YTD Exports vs Prior MY")
-    cum_cur = (
-        df.groupby("week_date")["exports"].sum().cumsum().reset_index()
-        .rename(columns={"exports": "cum_exports"})
-    )
-    fig_cum = go.Figure()
-    fig_cum.add_trace(go.Scatter(
-        x=cum_cur["week_date"], y=cum_cur["cum_exports"],
-        mode="lines", name=f"MY {sel_my_year}",
-        line=dict(color=JSA_CYAN, width=2.5),
-        hovertemplate="%{x|%b %d}: %{y:,.0f} " + unit_short + "<extra></extra>",
-    ))
-    if not df_prior.empty:
-        cum_prior = (
-            df_prior.groupby("week_date")["exports"].sum().cumsum().reset_index()
-            .rename(columns={"exports": "cum_exports"})
+    if wk_metrics:
+        fig_wk = go.Figure()
+        for ml in wk_metrics:
+            col_key = _ESR_METRICS[ml]
+            fig_wk.add_trace(go.Bar(
+                x=wk_totals["week_date"], y=wk_totals[col_key],
+                name=ml, marker_color=_METRIC_COLORS.get(col_key, JSA_CYAN),
+                hovertemplate=f"Wk %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra>{ml}</extra>",
+            ))
+        fig_wk.update_layout(
+            barmode="group",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#cdd9e5", size=11),
+            xaxis=dict(title="Week Ending", gridcolor="#2e353d", showgrid=True),
+            yaxis=dict(title=unit_short, gridcolor="#2e353d", showgrid=True),
+            legend=dict(bgcolor="rgba(0,0,0,0)"),
+            margin=dict(l=10, r=10, t=10, b=10), height=360,
         )
+        st.plotly_chart(fig_wk, use_container_width=True)
+    else:
+        st.info("Select at least one metric in Filters to show the weekly chart.")
+
+    # ── Cumulative chart with multi-MY comparison ─────────────────────────────
+    st.markdown(_DIV, unsafe_allow_html=True)
+    cum_col = _ESR_METRICS.get(cum_metric_label, "ytd_exports")
+    st.markdown(f"#### Cumulative {cum_metric_label} — MY Comparison")
+
+    comp_years = [int(y) for y in comp_my_sel]
+    all_cum_years = sorted(set([sel_my_year] + comp_years), reverse=True)
+
+    fig_cum = go.Figure()
+    _CUM_PAL = [JSA_CYAN, "#4a6741", "#f9a825", "#ef5350", "#ab47bc", "#26c6da", "#ff7043"]
+
+    for idx, yr in enumerate(all_cum_years):
+        if yr == sel_my_year:
+            yr_df = df.copy()
+        else:
+            with st.spinner(""):
+                yr_recs = _load_esr_exports(comm_code, yr)
+            yr_df = _parse_esr(yr_recs, yr)
+            if use_bushels and bu_factor and not yr_df.empty:
+                yr_df[numeric_cols] = yr_df[numeric_cols] * bu_factor
+            if sel_countries and not yr_df.empty:
+                yr_df = yr_df[yr_df["country"].isin(sel_countries)]
+
+        if yr_df.empty:
+            continue
+
+        # Build cumulative: sum across countries per week, then cumsum
+        cum_wk = (
+            yr_df.groupby("week_date")[cum_col].sum()
+            .sort_index().cumsum().reset_index()
+            .rename(columns={cum_col: "cum_val"})
+        )
+        is_sel = (yr == sel_my_year)
+        color  = _CUM_PAL[idx % len(_CUM_PAL)]
         fig_cum.add_trace(go.Scatter(
-            x=cum_prior["week_date"], y=cum_prior["cum_exports"],
-            mode="lines", name=f"MY {sel_my_year - 1}",
-            line=dict(color="#78909c", width=1.5, dash="dot"),
-            opacity=0.7,
-            hovertemplate="%{x|%b %d}: %{y:,.0f} " + unit_short + "<extra></extra>",
+            x=cum_wk["week_date"], y=cum_wk["cum_val"],
+            mode="lines", name=f"MY {yr}",
+            line=dict(color=color, width=2.5 if is_sel else 1.5,
+                      dash="solid" if is_sel else "dot"),
+            opacity=1.0 if is_sel else 0.75,
+            hovertemplate=f"MY {yr} · %{{x|%b %d}}: %{{y:,.{dec}f}} {unit_short}<extra></extra>",
         ))
+
     fig_cum.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#cdd9e5", size=11),
         xaxis=dict(title="Week Ending", gridcolor="#2e353d", showgrid=True),
         yaxis=dict(title=f"Cumulative {unit_short}", gridcolor="#2e353d", showgrid=True),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=320,
+        margin=dict(l=10, r=10, t=10, b=10), height=360,
     )
     st.plotly_chart(fig_cum, use_container_width=True)
 
-    # ── Top destinations (YTD) ────────────────────────────────────────────────
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:6px 0 14px;"></div>',
-        unsafe_allow_html=True,
-    )
-    col_dest, col_pie = st.columns(2)
+    # ── Destination charts ────────────────────────────────────────────────────
+    st.markdown(_DIV, unsafe_allow_html=True)
 
-    dest_ytd = (
-        latest.groupby("country")[["ytd_exports", "outstanding"]].sum()
-        .reset_index().sort_values("ytd_exports", ascending=True)
+    dest_metric_label = st.selectbox(
+        "Destination charts — show metric",
+        ["YTD Exports", "Outstanding Sales", "Net Sales", "YTD Commitment",
+         "Gross Sales", "Weekly Exports"],
+        key="esr_dest_metric",
+        help="Which metric to rank destinations by",
     )
-    top_dest = dest_ytd.tail(20)
+    dest_col = _ESR_METRICS.get(dest_metric_label, "ytd_exports")
 
-    with col_dest:
-        st.markdown("#### Top Destinations — YTD Exports")
+    dest_agg = (
+        latest.groupby("country")[[dest_col, "outstanding", "ytd_exports",
+                                   "net_sales", "ytd_commit"]].sum()
+        .reset_index().sort_values(dest_col, ascending=True)
+    )
+    top_dest_df = dest_agg.tail(top_n_dest)
+
+    col_bar, col_pie = st.columns(2)
+
+    with col_bar:
+        st.markdown(f"#### Top {top_n_dest} Destinations — {dest_metric_label}")
         fig_dest = go.Figure(go.Bar(
-            x=top_dest["ytd_exports"], y=top_dest["country"],
-            orientation="h", marker_color=JSA_CYAN,
-            text=top_dest["ytd_exports"].apply(lambda v: f"{v:,.0f}"),
+            x=top_dest_df[dest_col], y=top_dest_df["country"],
+            orientation="h",
+            marker_color=_METRIC_COLORS.get(dest_col, JSA_CYAN),
+            text=top_dest_df[dest_col].apply(lambda v: f"{v:,.{dec}f}"),
             textposition="outside",
             hovertemplate="%{y}: %{x:,.0f} " + unit_short + "<extra></extra>",
         ))
         fig_dest.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#cdd9e5", size=11),
-            xaxis=dict(title=unit_short, gridcolor="#2e353d"),
-            yaxis=dict(gridcolor="#2e353d"),
+            xaxis=dict(title=unit_short, gridcolor="#2e353d", showgrid=True),
+            yaxis=dict(gridcolor="#2e353d", showgrid=False),
             margin=dict(l=10, r=10, t=10, b=10),
-            height=max(300, len(top_dest) * 24),
+            height=max(320, len(top_dest_df) * 24),
         )
         st.plotly_chart(fig_dest, use_container_width=True)
 
     with col_pie:
-        st.markdown("#### Outstanding Sales by Destination")
-        out_top = dest_ytd[dest_ytd["outstanding"] > 0].tail(15)
-        fig_pie = go.Figure(go.Pie(
-            labels=out_top["country"], values=out_top["outstanding"],
-            hole=0.45,
-            textfont=dict(color="#cdd9e5", size=10),
-            hovertemplate="%{label}: %{value:,.0f} " + unit_short + "<extra></extra>",
-        ))
-        fig_pie.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cdd9e5", size=11),
-            legend=dict(bgcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=max(300, len(out_top) * 24),
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.markdown(f"#### {dest_metric_label} Share (pie)")
+        pie_df = top_dest_df[top_dest_df[dest_col] > 0]
+        if not pie_df.empty:
+            fig_pie = go.Figure(go.Pie(
+                labels=pie_df["country"], values=pie_df[dest_col],
+                hole=0.45,
+                textfont=dict(color="#cdd9e5", size=10),
+                hovertemplate="%{label}: %{value:,.0f} " + unit_short + " (%{percent})<extra></extra>",
+            ))
+            fig_pie.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#cdd9e5", size=11),
+                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                margin=dict(l=10, r=10, t=10, b=10), height=max(320, len(pie_df) * 24),
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-    # ── Data table ────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div style="border-top:1px solid #2e353d;margin:6px 0 14px;"></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("#### Country Detail — Latest Week")
-    tbl = latest[["country", "net_sales", "exports", "outstanding",
-                  "ytd_exports", "ytd_commit"]].copy()
+    # ── All-metrics country table ─────────────────────────────────────────────
+    st.markdown(_DIV, unsafe_allow_html=True)
+    st.markdown("#### Country Detail — Latest Week (all metrics)")
+
+    tbl = latest[["country","net_sales","gross_sales","exports","outstanding",
+                  "ytd_exports","ytd_commit","next_sales","next_outstanding"]].copy()
+    tbl = tbl[tbl[["net_sales","exports","outstanding","ytd_exports","ytd_commit"]]
+              .abs().sum(axis=1) > 0]
     tbl = tbl.sort_values("ytd_exports", ascending=False).reset_index(drop=True)
-    dec = 1 if use_bushels else 0
-    for col in ["net_sales","exports","outstanding","ytd_exports","ytd_commit"]:
-        tbl[col] = tbl[col].round(dec)
-    tbl.columns = ["Country", "Net Sales", "Exports", "Outstanding",
-                   "YTD Exports", "YTD Commitment"]
-    csv_data = tbl.to_csv(index=False)
+    for c in ["net_sales","gross_sales","exports","outstanding",
+               "ytd_exports","ytd_commit","next_sales","next_outstanding"]:
+        tbl[c] = tbl[c].round(dec)
+    tbl.columns = [
+        "Country", "Net Sales", "Gross Sales", "Exports", "Outstanding",
+        "YTD Exports", "YTD Commitment", "New Crop Net Sales", "New Crop Outstanding",
+    ]
     dl_col, _ = st.columns([1, 6])
     with dl_col:
         st.download_button(
-            "⬇ CSV", data=csv_data,
-            file_name=f"esr_{commodity}_{sel_my_year}_wk{latest_date_str.replace(' ','')}.csv",
+            "⬇ CSV", data=tbl.to_csv(index=False),
+            file_name=f"esr_{commodity}_{sel_my_year}_{latest_date_str.replace(' ','')}.csv",
             mime="text/csv", key="dl_esr_tbl",
         )
-    st.dataframe(tbl, use_container_width=True, height=380)
+    st.dataframe(tbl, use_container_width=True, height=400)
 
-    # ── New crop sales note ───────────────────────────────────────────────────
+    # ── New crop callout ──────────────────────────────────────────────────────
     next_net = _sum(latest, "next_sales")
-    if next_net and abs(next_net) > 0.01:
+    next_out = _sum(latest, "next_outstanding")
+    if abs(next_net) + abs(next_out) > 0.01:
         st.info(
-            f"**New Crop (MY {sel_my_year + 1}) Net Sales:** "
-            f"{next_net:,.{1 if use_bushels else 0}f} {unit_short} "
+            f"**New Crop MY {sel_my_year + 1}:** "
+            f"Net Sales {next_net:,.{dec}f} {unit_short} · "
+            f"Outstanding {next_out:,.{dec}f} {unit_short} "
             f"as of {latest_date_str}"
         )
 

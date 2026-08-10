@@ -45,6 +45,21 @@ LOGO_FULL_PATH  = _find("jsa_logo_full.png")
 LOGO_WHITE_PATH = _find("jsa_logo_white.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PLOTLY CHART CONFIG  (PNG download button + clean toolbar on every chart)
+# ─────────────────────────────────────────────────────────────────────────────
+_CHART_CONFIG = {
+    "displayModeBar":         True,
+    "displaylogo":            False,
+    "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+    "toImageButtonOptions":   {"format": "png", "scale": 2, "filename": "jsa_export_chart"},
+}
+_orig_plotly_chart = st.plotly_chart
+def _patched_plotly_chart(fig, **kw):
+    kw.setdefault("config", _CHART_CONFIG)
+    return _orig_plotly_chart(fig, **kw)
+st.plotly_chart = _patched_plotly_chart
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BRAND COLORS
 # ─────────────────────────────────────────────────────────────────────────────
 JSA_GREEN = "#4a6741"
@@ -1049,6 +1064,20 @@ _TABLE_CSS = """
 .corn-tbl td.m-dash { background: #1e2124 !important; color: #4a5568 !important; }
 </style>
 """
+
+def _show_table(pivot: pd.DataFrame, html: str, key: str) -> None:
+    """Render a styled HTML table with a CSV download button above it."""
+    btn_col, _ = st.columns([1, 6])
+    with btn_col:
+        st.download_button(
+            "⬇ CSV",
+            data=pivot.to_csv(),
+            file_name=f"{key}.csv",
+            mime="text/csv",
+            key=f"dl_{key}",
+        )
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def render_table_html(data_pivot, stats, all_years, cy, ly, months,
                       decimals: int = 0,
@@ -2813,13 +2842,14 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
             f"Stats reflect prior marketing years only.",
             unsafe_allow_html=True,
         )
-        st.markdown(
+        _show_table(
+            monthly_pivot,
             render_table_html(monthly_pivot, monthly_stats, all_years,
                               cy, ly, months, decimals=unit_decimals,
                               cy_est_months=cy_est_months,
                               model1_pivot=model1_pivot,
                               model2_pivot=model2_pivot),
-            unsafe_allow_html=True,
+            f"{commodity}_{field_label}_monthly",
         )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
@@ -2841,13 +2871,14 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
             f"Stats reflect prior marketing years only.",
             unsafe_allow_html=True,
         )
-        st.markdown(
+        _show_table(
+            cum_pivot,
             render_table_html(cum_pivot, cum_stats, all_years,
                               cy, ly, months, decimals=unit_decimals,
                               cy_est_months=cy_est_months,
                               model1_pivot=cum_model1,
                               model2_pivot=cum_model2),
-            unsafe_allow_html=True,
+            f"{commodity}_{field_label}_cumulative",
         )
         st.plotly_chart(
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,
@@ -3392,13 +3423,14 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
                         if model1_pivot_w else None)
         cum_model2_w = (build_cumulative_pivot(model2_pivot_w, all_years, months)
                         if model2_pivot_w else None)
-        st.markdown(
+        _show_table(
+            monthly_pivot,
             render_table_html(monthly_pivot, monthly_stats, all_years,
                               cy, ly, months, decimals=unit_decimals,
                               cy_est_months=cy_est_months,
                               model1_pivot=model1_pivot_w,
                               model2_pivot=model2_pivot_w),
-            unsafe_allow_html=True,
+            f"wheat_{field_label}_monthly",
         )
         st.plotly_chart(
             make_seasonal_chart(monthly_pivot, all_years, cy, complete_years,
@@ -3420,13 +3452,14 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
             f"Stats reflect prior marketing years only.",
             unsafe_allow_html=True,
         )
-        st.markdown(
+        _show_table(
+            cum_pivot,
             render_table_html(cum_pivot, cum_stats, all_years,
                               cy, ly, months, decimals=unit_decimals,
                               cy_est_months=cy_est_months,
                               model1_pivot=cum_model1_w,
                               model2_pivot=cum_model2_w),
-            unsafe_allow_html=True,
+            f"wheat_{field_label}_cumulative",
         )
         st.plotly_chart(
             make_seasonal_chart(cum_pivot, all_years, cy, complete_years,

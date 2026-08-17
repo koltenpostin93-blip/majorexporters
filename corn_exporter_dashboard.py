@@ -24,6 +24,7 @@ import base64
 import os
 import urllib.parse
 import urllib.request
+import requests as _requests
 import ssl
 import json
 from datetime import datetime
@@ -628,62 +629,83 @@ _FORECAST_CONFIG_FALLBACK = {
 }
 
 
+
+# Hardcoded PSD country codes — avoids the /country lookup call which is unreliable.
+# These are the authoritative USDA FAS PSD countryCode values for each dashboard field.
+_PSD_HARDCODED_CODES = {
+    "US":        "US",
+    "Brazil":    "BR",
+    "Argentina": "AR",
+    "Ukraine":   "UA",
+    "Canada":    "CA",
+    "Russia":    "RS",
+    "EU":        "E2",   # PSD uses "E2" for EU-27
+    "Australia": "AS",
+}
+
+_PSD_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; JSA-Dashboard/1.0)",
+    "Accept":     "application/json",
+}
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_wasde_forecasts() -> tuple:
     """
     Pull current-MY export forecasts from USDA FAS PSD (attribute 88).
-    Returns (forecast_dict, source_str) where source is 'live' or 'fallback'.
-    Aggregate fields TotalNonUS and MajorExporter are computed from country totals.
+    Returns (forecast_dict, source_str) where source is 'live' or 'fallback:…'.
+    Strategy: skip the /country lookup (unreliable) and use hardcoded PSD codes.
     """
     now = datetime.now()
     result: dict = {}
-    error_msg: str = ""
+
+    # Build field → country-code map from hardcoded values (no API call needed)
+    field_codes = dict(_PSD_HARDCODED_CODES)
+
+    # Try to enrich from the /country endpoint, but don't fail if it's down
+    try:
+        _r = _requests.get(f"{_PSD_BASE}/country", headers=_PSD_HEADERS, timeout=12)
+        if _r.ok:
+            for c in _r.json():
+                name = c.get("countryName", "").strip().lower()
+                code = c.get("countryCode", "")
+                for field, names in _PSD_FIELD_NAMES.items():
+                    if name in names and field not in field_codes:
+                        field_codes[field] = code
+    except Exception:
+        pass  # keep hardcoded codes; continue to data fetch
 
     try:
-        # ── 1. Resolve country name → PSD countryCode ────────────────────────
-        with urllib.request.urlopen(f"{_PSD_BASE}/country/list", timeout=15) as _r:
-            _countries = json.loads(_r.read())
-        country_lookup = {
-            c["countryName"].strip().lower(): c["countryCode"]
-            for c in _countries
-        }
-
-        field_codes: dict[str, str] = {}
-        for field, names in _PSD_FIELD_NAMES.items():
-            for name in names:
-                if name in country_lookup:
-                    field_codes[field] = country_lookup[name]
-                    break
-
-        # ── 2. Fetch exports per commodity + current MY ───────────────────────
         for comm, psd_code in _PSD_COMMODITY_CODES.items():
             start_month = _PSD_MY_START[comm]
             my = now.year if now.month >= start_month else now.year - 1
 
-            params = urllib.parse.urlencode({
+            params = {
                 "commodityCode": psd_code,
                 "marketYear":    my,
                 "attributeId":   88,
-            })
-            with urllib.request.urlopen(
-                f"{_PSD_BASE}/data/get?{params}", timeout=20
-            ) as _r:
-                rows = json.loads(_r.read())
+            }
+            resp = _requests.get(
+                f"{_PSD_BASE}/data/get",
+                params=params,
+                headers=_PSD_HEADERS,
+                timeout=25,
+            )
+            resp.raise_for_status()
+            rows = resp.json()
 
-            # Latest value per countryCode (take max calendarYear if multiple)
-            country_vals: dict[str, float] = {}
+            # Latest value per countryCode (take max across calendar years if multiple)
+            country_vals: dict = {}
             for row in rows:
                 code = row.get("countryCode", "")
                 val  = float(row.get("value") or 0)
                 if code not in country_vals or val > country_vals[code]:
                     country_vals[code] = val
 
-            # Map individual country fields
             for field, code in field_codes.items():
                 if code in country_vals and country_vals[code] > 0:
                     result[(comm, field)] = country_vals[code]
 
-            # Compute aggregate fields
             non_us_total = sum(
                 result.get((comm, f), 0) for f in _PSD_NON_US_COMPS.get(comm, [])
             )
@@ -697,11 +719,9 @@ def _load_wasde_forecasts() -> tuple:
                 result[(comm, "MajorExporter")] = major_total
 
     except Exception as _e:
-        error_msg = str(_e)
         merged = dict(_FORECAST_CONFIG_FALLBACK)
-        return merged, f"fallback:{error_msg}"
+        return merged, f"fallback:{_e}"
 
-    # Merge: live API values override fallback
     merged = dict(_FORECAST_CONFIG_FALLBACK)
     merged.update(result)
     return merged, "live"
@@ -2727,12 +2747,12 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         with _snap_ctrl2:
             _snap_local_my = st.toggle(
                 "Local MY",
-                value=False,
+                value=True,
                 key=f"{pfx}_snap_local_my",
                 help=(
-                    "**OFF** (default) — USDA Oct–Sep for all countries.\n\n"
-                    f"**ON** — US uses Sep–Aug; "
-                    f"AR/BR use {cfg['arbr_label']} (local harvest MY)."
+                    "**ON** (default) — US uses Sep–Aug; "
+                    f"AR/BR use {cfg['arbr_label']} (local harvest MY).\n\n"
+                    "**OFF** — USDA Oct–Sep for all countries."
                 ),
             )
 

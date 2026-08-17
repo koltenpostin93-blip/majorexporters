@@ -500,8 +500,50 @@ _FULL_MONTH_TO_ABB = {
 
 @st.cache_data(show_spinner=False)
 def load_cutoff_config() -> dict[str, str]:
-    """All data sourced from official APIs — no estimate cutoffs needed."""
+    """No static cutoffs — estimates are detected dynamically from FGIS vs GATS."""
     return {}
+
+
+_MO_NAME_TO_NUM = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
+@st.cache_data(ttl=86_400, show_spinner=False)
+def _load_census_gats_keys(commodity: str) -> frozenset:
+    """Return frozenset of (year, month) tuples where Census GATS data exists."""
+    gats_df = _load_census_gats(commodity)
+    if gats_df.empty:
+        return frozenset()
+    return frozenset(
+        (int(r["year"]), int(r["month"])) for _, r in gats_df.iterrows()
+    )
+
+
+def _us_fgis_est_months(commodity: str, cy: str, months: list,
+                         my_start_month: int = 10) -> set:
+    """
+    Return the set of MY month abbreviations (e.g. {"Jul", "Aug"}) in the
+    current MY that have FGIS-filled data but no Census GATS data.
+    These are shown as EST — indicative only, not final Census figures.
+    """
+    gats_keys = _load_census_gats_keys(commodity)
+    try:
+        cy_start = int(cy.split("/")[0])
+    except Exception:
+        return set()
+
+    fgis_months = set()
+    for m in months:
+        mo_num = _MO_NAME_TO_NUM.get(m)
+        if mo_num is None:
+            continue
+        # Map MY month → calendar (year, month)
+        cal_year = cy_start if mo_num >= my_start_month else cy_start + 1
+        if (cal_year, mo_num) not in gats_keys:
+            fgis_months.add(m)
+    return fgis_months
 
 
 def _cy_estimate_months(field: str, cutoffs: dict[str, str],
@@ -820,11 +862,20 @@ def _load_fgis_inspections(commodity: str) -> pd.DataFrame:
 def _load_us_auto(commodity: str) -> dict:
     """Blended GATS + FGIS US monthly exports → {(year, month): tmt}.
     GATS is primary (official, ~6-8 wk lag); FGIS extends forward for recent months.
+    FGIS is capped at the previous complete calendar month — the current month is
+    always partial (FGIS reports weekly; mid-month only a fraction of weeks are in).
     """
+    now = pd.Timestamp.now()
+    # Last fully-complete calendar month (current month is always partial in FGIS)
+    prev = now - pd.offsets.MonthBegin(1)
+    fgis_cap = (int(prev.year), int(prev.month))
+
     records: dict = {}
     fgis_df = _load_fgis_inspections(commodity)
     for _, row in fgis_df.iterrows():
-        records[(int(row["year"]), int(row["month"]))] = float(row["tmt"])
+        key = (int(row["year"]), int(row["month"]))
+        if key <= fgis_cap:
+            records[key] = float(row["tmt"])
     gats_df = _load_census_gats(commodity)
     for _, row in gats_df.iterrows():
         records[(int(row["year"]), int(row["month"]))] = float(row["tmt"])
@@ -2778,6 +2829,16 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # ── Official / Estimate classification ───────────────────────────────
     cutoffs       = load_cutoff_config()
     cy_est_months = _cy_estimate_months(field, cutoffs, months)
+
+    # US field: months filled by FGIS (not yet in Census GATS) are estimates.
+    # These are indicative only — Census is the authoritative source.
+    # my_start_month: corn/soy/meal = 10 (Oct), wheat = 7 (Jul)
+    if field == "US":
+        _my_sm = 7 if commodity == "wheat" else 10
+        cy_est_months = cy_est_months | _us_fgis_est_months(
+            commodity, cy, months, my_start_month=_my_sm
+        )
+
     has_estimates = bool(cy_est_months)
 
     # ── Forecast seasonal shares (computed from history, no input needed) ───
@@ -3463,6 +3524,10 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     # ── Official / Estimate classification ───────────────────────────────
     cutoffs         = load_cutoff_config()
     cy_est_months   = _cy_estimate_months(field, cutoffs, months)
+    if field == "US":
+        cy_est_months = cy_est_months | _us_fgis_est_months(
+            "wheat", cy, months, my_start_month=7
+        )
     has_estimates   = bool(cy_est_months)
 
     # ── Forecast seasonal shares ──────────────────────────────────────────

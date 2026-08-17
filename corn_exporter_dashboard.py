@@ -587,15 +587,15 @@ _FORECAST_CONFIG_FALLBACK = {
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_wasde_forecasts() -> dict:
+def _load_wasde_forecasts() -> tuple:
     """
     Pull current-MY export forecasts from USDA FAS PSD (attribute 88).
-    Returns {(dashboard_commodity, field): value_tmt}.
+    Returns (forecast_dict, source_str) where source is 'live' or 'fallback'.
     Aggregate fields TotalNonUS and MajorExporter are computed from country totals.
-    Falls back to _FORECAST_CONFIG_FALLBACK on any API error.
     """
     now = datetime.now()
     result: dict = {}
+    error_msg: str = ""
 
     try:
         # ── 1. Resolve country name → PSD countryCode ────────────────────────
@@ -654,17 +654,26 @@ def _load_wasde_forecasts() -> dict:
             if major_total > 0:
                 result[(comm, "MajorExporter")] = major_total
 
-    except Exception:
-        return dict(_FORECAST_CONFIG_FALLBACK)
+    except Exception as _e:
+        error_msg = str(_e)
+        merged = dict(_FORECAST_CONFIG_FALLBACK)
+        return merged, f"fallback:{error_msg}"
 
-    # Merge: live API values override fallback, but keep any fallback key not returned
+    # Merge: live API values override fallback
     merged = dict(_FORECAST_CONFIG_FALLBACK)
     merged.update(result)
-    return merged
+    return merged, "live"
 
 
 def load_forecast_config() -> dict:
-    return _load_wasde_forecasts()
+    data, _ = _load_wasde_forecasts()
+    return data
+
+
+def _wasde_api_source() -> str:
+    """Returns 'live' or 'fallback:<reason>' — used to surface API-down warnings."""
+    _, src = _load_wasde_forecasts()
+    return src
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2775,6 +2784,15 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # Use only the most recent 5 complete years so share distributions reflect
     # current competitive dynamics rather than older export patterns.
     forecast_cfg    = load_forecast_config()
+    _wasde_src = _wasde_api_source()
+    if _wasde_src.startswith("fallback"):
+        _err = _wasde_src.split(":", 1)[1] if ":" in _wasde_src else "unknown error"
+        st.warning(
+            f"⚠️ **USDA FAS PSD API is unreachable** — forecast values are using "
+            f"the last-known static fallback and may not reflect the latest WASDE. "
+            f"Error: `{_err}`",
+            icon="🌐",
+        )
     _share_years    = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares          = _compute_seasonal_shares(monthly_pivot, _share_years, months)
 
@@ -3450,6 +3468,15 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     # ── Forecast seasonal shares ──────────────────────────────────────────
     # Limit to recent 5 complete years for share computation.
     forecast_cfg    = load_forecast_config()
+    _wasde_src_w = _wasde_api_source()
+    if _wasde_src_w.startswith("fallback"):
+        _err_w = _wasde_src_w.split(":", 1)[1] if ":" in _wasde_src_w else "unknown error"
+        st.warning(
+            f"⚠️ **USDA FAS PSD API is unreachable** — forecast values are using "
+            f"the last-known static fallback and may not reflect the latest WASDE. "
+            f"Error: `{_err_w}`",
+            icon="🌐",
+        )
     _usda_saved_w   = forecast_cfg.get(("wheat", field))
     _share_years_w  = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares_w        = _compute_seasonal_shares(monthly_pivot, _share_years_w, months)

@@ -593,12 +593,88 @@ _FORECAST_CONFIG = {
 }
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_wasde_forecasts() -> tuple:
+    """
+    Try to fetch WASDE export forecasts (PSD attribute 88) through
+    api.fas.usda.gov — same gateway as ESR, reachable from Streamlit Cloud.
+    Returns (forecast_dict, source_str). Falls back to _FORECAST_CONFIG on failure.
+    """
+    _PSD_CODES = {
+        "corn": "0440000", "soybeans": "2222000",
+        "soybeanmeal": "2226000", "wheat": "0410000",
+    }
+    _MY_START = {"corn": 10, "soybeans": 10, "soybeanmeal": 10, "wheat": 7}
+    _CCODES = {
+        "US": "US", "Brazil": "BR", "Argentina": "AR", "Ukraine": "UA",
+        "Canada": "CA", "Russia": "RS", "EU": "E2", "Australia": "AS",
+    }
+    _NON_US = {
+        "corn": ["Brazil", "Argentina", "Ukraine"],
+        "soybeans": ["Brazil", "Argentina"],
+        "soybeanmeal": ["Brazil", "Argentina"],
+        "wheat": ["Canada", "Russia", "EU", "Ukraine", "Argentina", "Australia"],
+    }
+    _MAJOR = {
+        "corn": ["US", "Brazil", "Argentina", "Ukraine"],
+        "soybeans": ["US", "Brazil", "Argentina"],
+        "soybeanmeal": ["US", "Brazil", "Argentina"],
+    }
+
+    now = datetime.now()
+    result: dict = {}
+
+    try:
+        for comm, psd_code in _PSD_CODES.items():
+            my = now.year if now.month >= _MY_START[comm] else now.year - 1
+            params = urllib.parse.urlencode({
+                "commodityCode": psd_code,
+                "marketYear": my,
+                "attributeId": 88,
+                "api_key": _ESR_API_KEY,
+            })
+            with urllib.request.urlopen(
+                f"{_ESR_GATEWAY}/api/psd/data?{params}", timeout=10
+            ) as r:
+                rows = json.loads(r.read())
+
+            country_vals: dict = {}
+            for row in rows:
+                code = row.get("countryCode", "")
+                val = float(row.get("value") or 0)
+                if code not in country_vals or val > country_vals[code]:
+                    country_vals[code] = val
+
+            for field, code in _CCODES.items():
+                if code in country_vals and country_vals[code] > 0:
+                    result[(comm, field)] = country_vals[code]
+
+            non_us = sum(result.get((comm, f), 0) for f in _NON_US.get(comm, []))
+            if non_us > 0:
+                result[(comm, "TotalNonUS")] = non_us
+            major = sum(result.get((comm, f), 0) for f in _MAJOR.get(comm, []))
+            if major > 0:
+                result[(comm, "MajorExporter")] = major
+
+    except Exception as _e:
+        return dict(_FORECAST_CONFIG), f"fallback:{_e}"
+
+    if not result:
+        return dict(_FORECAST_CONFIG), "fallback:no data"
+
+    merged = dict(_FORECAST_CONFIG)
+    merged.update(result)
+    return merged, "live"
+
+
 def load_forecast_config() -> dict:
-    return dict(_FORECAST_CONFIG)
+    data, _ = _load_wasde_forecasts()
+    return data
 
 
 def _wasde_api_source() -> str:
-    return "static"
+    _, src = _load_wasde_forecasts()
+    return src
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2829,104 +2905,37 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
         f'</div>'
     )
 
+    # ── WASDE forecast total — from live API or static config ────────────
     if field in _SOY_AGGREGATE_COMPS:
-        # ── Soy/meal: direct Oct-Sep sum of component inputs ──────────────
-        comp_fields   = _SOY_AGGREGATE_COMPS[field]
-        comp_totals:  dict[str, float] = {}
-        missing_comps: list[str] = []
-        for _comp in comp_fields:
-            _comp_key = f"{pfx}_{_comp}_usda_input"
-            if _comp_key in st.session_state and float(st.session_state[_comp_key]) > 0:
-                comp_totals[_comp] = float(st.session_state[_comp_key])
-            else:
-                _comp_saved = forecast_cfg.get((commodity, _comp))
-                if _comp_saved:
-                    _cv = float(_comp_saved) * unit_factor if use_bushels else float(_comp_saved)
-                    if _cv > 0:
-                        comp_totals[_comp] = _cv
-                    else:
-                        missing_comps.append(FIELDS.get(_comp, _comp))
-                else:
-                    missing_comps.append(FIELDS.get(_comp, _comp))
-
-        derived_total = sum(comp_totals.values()) if comp_totals else 0.0
-
-        with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=derived_total > 0):
-            _ag1, _ag2 = st.columns([2, 3])
-            with _ag1:
-                if comp_totals:
-                    _rows = "".join(
-                        f'<tr><td style="padding:2px 10px 2px 0;color:#aab4c0;">'
-                        f'{FIELDS.get(c, c)}</td>'
-                        f'<td style="text-align:right;color:#fff;font-weight:600;">'
-                        f'{v:,.0f}</td></tr>'
-                        for c, v in comp_totals.items()
-                    )
-                    _missing_note = (
-                        f'<div style="color:#e57373;font-size:11px;margin-top:6px;">'
-                        f'⚠ Missing Oct–Sep input for: {", ".join(missing_comps)}'
-                        f'</div>' if missing_comps else ""
-                    )
-                    st.markdown(
-                        f'<div style="font-family:Arial;font-size:12px;">'
-                        f'<b style="color:#8a9aaa;">Component USDA totals — Oct–Sep ({unit_short}):</b>'
-                        f'<table style="margin-top:6px;border-collapse:collapse;">{_rows}'
-                        f'<tr style="border-top:1px solid #444;">'
-                        f'<td style="padding:4px 10px 2px 0;color:#aab4c0;font-weight:700;">Total</td>'
-                        f'<td style="text-align:right;color:{JSA_CYAN};font-weight:700;">'
-                        f'{derived_total:,.0f}</td></tr></table>'
-                        f'{_missing_note}'
-                        f'<span style="color:#555;font-size:11px;display:block;margin-top:4px;">'
-                        f'Auto-derived — update individual country inputs to change.</span>'
-                        f'</div>', unsafe_allow_html=True,
-                    )
-                else:
-                    st.info("Enter USDA WASDE totals on individual country tabs to enable forecasting here.", icon="ℹ️")
-            with _ag2:
-                st.markdown(_model_legend_html, unsafe_allow_html=True)
-
+        derived_total = sum(
+            (float(forecast_cfg.get((commodity, c)) or 0) * unit_factor if use_bushels
+             else float(forecast_cfg.get((commodity, c)) or 0))
+            for c in _SOY_AGGREGATE_COMPS[field]
+            if forecast_cfg.get((commodity, c))
+        )
         usda_total = derived_total if derived_total > 0 else None
-
     else:
-        # ── Manual USDA input (individual country / standard field) ───────
-        _saved_display = 0.0
-        if _usda_saved:
-            _saved_display = float(_usda_saved) * unit_factor if use_bushels else float(_usda_saved)
+        _raw = forecast_cfg.get((commodity, field))
+        usda_total = (float(_raw) * unit_factor if use_bushels else float(_raw)) if _raw else None
 
-        # Key includes "_local" suffix when Brazil/Argentina is on Local MY so the
-        # standard (Oct-Sep) and local (Mar-Feb / Apr-Mar) values are stored separately
-        # and can both coexist in session state without overwriting each other.
-        _usda_key = (f"{pfx}_{field}_local_usda_input"
-                     if _is_local_field else f"{pfx}_{field}_usda_input")
-        if _saved_display > 0 and _usda_key not in st.session_state:
-            st.session_state[_usda_key] = _saved_display
-
-        # Label the input with the active MY convention so the user knows which
-        # total to enter (Oct-Sep WASDE vs local Mar-Feb / Apr-Mar).
-        _my_suffix = f" ({my_label})" if _is_local_field else ""
-        with st.expander(
-            f"📈  USDA MY Forecast — {field_label}",
-            expanded=bool(st.session_state.get(_usda_key, _saved_display)),
-        ):
-            _fc1, _fc2 = st.columns([2, 3])
-            with _fc1:
-                usda_input = st.number_input(
-                    f"USDA {cy} MY Total{_my_suffix} ({unit_short})",
-                    min_value=0.0,
-                    value=_saved_display,
-                    step=500.0,
-                    format="%.0f",
-                    key=_usda_key,
-                    help=(
-                        f"Enter the USDA WASDE marketing year total for {field_label} "
-                        f"in {unit_short}{_my_suffix}. This drives the Seasonal and "
-                        f"Pace-Adjusted forecast lines on the chart below."
-                    ),
+    with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(usda_total)):
+        _fc1, _fc2 = st.columns([2, 3])
+        with _fc1:
+            if usda_total:
+                _src_lbl = "USDA API (live)" if _wasde_api_source() == "live" else f"WASDE {_WASDE_AS_OF} (static)"
+                st.markdown(
+                    f'<div style="font-family:Arial;font-size:13px;">'
+                    f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
+                    f'<span style="font-size:24px;font-weight:700;color:#e8ede9;">'
+                    f'{usda_total:,.0f}</span><br>'
+                    f'<span style="color:#555;font-size:11px;">{_src_lbl}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
                 )
-            with _fc2:
-                st.markdown(_model_legend_html, unsafe_allow_html=True)
-
-        usda_total = usda_input if usda_input > 0 else None
+            else:
+                st.caption("No WASDE forecast available for this field.")
+        with _fc2:
+            st.markdown(_model_legend_html, unsafe_allow_html=True)
 
     # Build forecast pivots from the live UI value
     model1_pivot, model2_pivot, pace_info = _build_forecast_pivots(
@@ -3476,7 +3485,6 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     )
 
     if field in _W_SKIP_AGGREGATE:
-        # No M1/M2 forecast for wheat aggregate categories
         st.info(
             "M1/M2 forecasting is not available for wheat aggregate categories "
             "(Total Non-US, Major Exporters) due to mixed marketing year conventions "
@@ -3486,36 +3494,28 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
         usda_total_w = None
 
     else:
-        _saved_disp_w = 0.0
-        if _usda_saved_w:
-            _saved_disp_w = float(_usda_saved_w) * unit_factor if use_bushels else float(_usda_saved_w)
+        # ── WASDE forecast total — from live API or static config ─────────
+        _raw_w = forecast_cfg.get(("wheat", field))
+        usda_total_w = (float(_raw_w) * unit_factor if use_bushels else float(_raw_w)) if _raw_w else None
 
-        _usda_key_w = f"wheat_{field}_usda_input"
-        if _saved_disp_w > 0 and _usda_key_w not in st.session_state:
-            st.session_state[_usda_key_w] = _saved_disp_w
-
-        with st.expander(
-            f"📈  USDA MY Forecast — {field_label}",
-            expanded=bool(st.session_state.get(_usda_key_w, _saved_disp_w)),
-        ):
+        with st.expander(f"📈  USDA MY Forecast — {field_label}", expanded=bool(usda_total_w)):
             _fw1, _fw2 = st.columns([2, 3])
             with _fw1:
-                usda_input_w = st.number_input(
-                    f"USDA {cy} MY Total ({unit_short})",
-                    min_value=0.0,
-                    value=_saved_disp_w,
-                    step=500.0,
-                    format="%.0f",
-                    key=_usda_key_w,
-                    help=(
-                        f"Enter the USDA WASDE marketing year total for {field_label} "
-                        f"in {unit_short}."
-                    ),
-                )
+                if usda_total_w:
+                    _src_lbl_w = "USDA API (live)" if _wasde_api_source() == "live" else f"WASDE {_WASDE_AS_OF} (static)"
+                    st.markdown(
+                        f'<div style="font-family:Arial;font-size:13px;">'
+                        f'<span style="color:#8a9aaa;">WASDE {cy} MY Total ({unit_short})</span><br>'
+                        f'<span style="font-size:24px;font-weight:700;color:#e8ede9;">'
+                        f'{usda_total_w:,.0f}</span><br>'
+                        f'<span style="color:#555;font-size:11px;">{_src_lbl_w}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("No WASDE forecast available for this field.")
             with _fw2:
                 st.markdown(_w_legend_html, unsafe_allow_html=True)
-
-        usda_total_w = usda_input_w if usda_input_w > 0 else None
 
     model1_pivot_w, model2_pivot_w, pace_info_w = _build_forecast_pivots(
         monthly_pivot, all_years, cy, months, shares_w, usda_total_w, cy_est_months

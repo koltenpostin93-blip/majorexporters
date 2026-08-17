@@ -518,9 +518,55 @@ def _cy_estimate_months(field: str, cutoffs: dict[str, str],
 # ─────────────────────────────────────────────────────────────────────────────
 # FORECAST CONFIG & MODELS
 # ─────────────────────────────────────────────────────────────────────────────
-# USDA marketing-year total export forecasts (TMT). Update monthly after WASDE.
-_FORECAST_CONFIG = {
-    ("corn",        "US"):            83824,
+# ── USDA FAS PSD API — live WASDE export forecasts ───────────────────────────
+# Attribute 88 = Exports. Values stored in 1000 MT = TMT directly.
+# Refreshed every hour; falls back to _FORECAST_CONFIG_FALLBACK on API failure.
+_PSD_BASE = "https://apps.fas.usda.gov/psdonline/api"
+
+_PSD_COMMODITY_CODES = {
+    "corn":        "0440000",
+    "soybeans":    "2222000",
+    "soybeanmeal": "2226000",
+    "wheat":       "0410000",
+}
+
+# Marketing year start month (month ≥ this → MY = calendar year)
+_PSD_MY_START = {
+    "corn":        10,
+    "soybeans":    10,
+    "soybeanmeal": 10,
+    "wheat":        7,
+}
+
+# Dashboard field → PSD country name(s) to match (lowercase)
+_PSD_FIELD_NAMES = {
+    "US":        ["united states"],
+    "Brazil":    ["brazil"],
+    "Argentina": ["argentina"],
+    "Ukraine":   ["ukraine"],
+    "Canada":    ["canada"],
+    "Russia":    ["russia"],
+    "EU":        ["european union", "eu-27", "eu 27"],
+    "Australia": ["australia"],
+}
+
+# Non-US and Major-Exporter component lists per commodity
+_PSD_NON_US_COMPS = {
+    "corn":        ["Brazil", "Argentina", "Ukraine"],
+    "soybeans":    ["Brazil", "Argentina"],
+    "soybeanmeal": ["Brazil", "Argentina"],
+    "wheat":       ["Canada", "Russia", "EU", "Ukraine", "Argentina", "Australia"],
+}
+_PSD_MAJOR_COMPS = {
+    "corn":        ["US", "Brazil", "Argentina", "Ukraine"],
+    "soybeans":    ["US", "Brazil", "Argentina"],
+    "soybeanmeal": ["US", "Brazil", "Argentina"],
+}
+
+# Static fallback — used only when the PSD API is unreachable.
+# Update these after each WASDE release as a backup, but the live pull takes priority.
+_FORECAST_CONFIG_FALLBACK = {
+    ("corn",        "US"):            55000,
     ("corn",        "Brazil"):        43000,
     ("corn",        "Argentina"):     37000,
     ("corn",        "Ukraine"):       22000,
@@ -539,8 +585,86 @@ _FORECAST_CONFIG = {
     ("wheat",       "Australia"):     26500,
 }
 
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_wasde_forecasts() -> dict:
+    """
+    Pull current-MY export forecasts from USDA FAS PSD (attribute 88).
+    Returns {(dashboard_commodity, field): value_tmt}.
+    Aggregate fields TotalNonUS and MajorExporter are computed from country totals.
+    Falls back to _FORECAST_CONFIG_FALLBACK on any API error.
+    """
+    now = datetime.now()
+    result: dict = {}
+
+    try:
+        # ── 1. Resolve country name → PSD countryCode ────────────────────────
+        with urllib.request.urlopen(f"{_PSD_BASE}/country/list", timeout=15) as _r:
+            _countries = json.loads(_r.read())
+        country_lookup = {
+            c["countryName"].strip().lower(): c["countryCode"]
+            for c in _countries
+        }
+
+        field_codes: dict[str, str] = {}
+        for field, names in _PSD_FIELD_NAMES.items():
+            for name in names:
+                if name in country_lookup:
+                    field_codes[field] = country_lookup[name]
+                    break
+
+        # ── 2. Fetch exports per commodity + current MY ───────────────────────
+        for comm, psd_code in _PSD_COMMODITY_CODES.items():
+            start_month = _PSD_MY_START[comm]
+            my = now.year if now.month >= start_month else now.year - 1
+
+            params = urllib.parse.urlencode({
+                "commodityCode": psd_code,
+                "marketYear":    my,
+                "attributeId":   88,
+            })
+            with urllib.request.urlopen(
+                f"{_PSD_BASE}/data/get?{params}", timeout=20
+            ) as _r:
+                rows = json.loads(_r.read())
+
+            # Latest value per countryCode (take max calendarYear if multiple)
+            country_vals: dict[str, float] = {}
+            for row in rows:
+                code = row.get("countryCode", "")
+                val  = float(row.get("value") or 0)
+                if code not in country_vals or val > country_vals[code]:
+                    country_vals[code] = val
+
+            # Map individual country fields
+            for field, code in field_codes.items():
+                if code in country_vals and country_vals[code] > 0:
+                    result[(comm, field)] = country_vals[code]
+
+            # Compute aggregate fields
+            non_us_total = sum(
+                result.get((comm, f), 0) for f in _PSD_NON_US_COMPS.get(comm, [])
+            )
+            if non_us_total > 0:
+                result[(comm, "TotalNonUS")] = non_us_total
+
+            major_total = sum(
+                result.get((comm, f), 0) for f in _PSD_MAJOR_COMPS.get(comm, [])
+            )
+            if major_total > 0:
+                result[(comm, "MajorExporter")] = major_total
+
+    except Exception:
+        return dict(_FORECAST_CONFIG_FALLBACK)
+
+    # Merge: live API values override fallback, but keep any fallback key not returned
+    merged = dict(_FORECAST_CONFIG_FALLBACK)
+    merged.update(result)
+    return merged
+
+
 def load_forecast_config() -> dict:
-    return dict(_FORECAST_CONFIG)
+    return _load_wasde_forecasts()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -24,7 +24,6 @@ import base64
 import os
 import urllib.parse
 import urllib.request
-import requests as _requests
 import ssl
 import json
 from datetime import datetime
@@ -561,181 +560,45 @@ def _cy_estimate_months(field: str, cutoffs: dict[str, str],
 # ─────────────────────────────────────────────────────────────────────────────
 # FORECAST CONFIG & MODELS
 # ─────────────────────────────────────────────────────────────────────────────
-# ── USDA FAS PSD API — live WASDE export forecasts ───────────────────────────
-# Attribute 88 = Exports. Values stored in 1000 MT = TMT directly.
-# Refreshed every hour; falls back to _FORECAST_CONFIG_FALLBACK on API failure.
-_PSD_BASE = "https://apps.fas.usda.gov/psdonline/api"
+# WASDE export forecasts — update _FORECAST_CONFIG + _WASDE_AS_OF after each
+# monthly WASDE release (apps.fas.usda.gov is firewalled from Streamlit Cloud).
+# All values in thousand metric tons (TMT) per USDA convention.
 
-_PSD_COMMODITY_CODES = {
-    "corn":        "0440000",
-    "soybeans":    "2222000",
-    "soybeanmeal": "2226000",
-    "wheat":       "0410000",
+_WASDE_AS_OF = "August 2025"   # ← update this string after each WASDE release
+
+_FORECAST_CONFIG = {
+    ("corn",        "US"):             55000,
+    ("corn",        "Brazil"):         43000,
+    ("corn",        "Argentina"):      37000,
+    ("corn",        "Ukraine"):        22000,
+    ("corn",        "TotalNonUS"):    102000,   # Brazil + Argentina + Ukraine
+    ("corn",        "MajorExporter"): 157000,   # US + Brazil + Argentina + Ukraine
+    ("soybeans",    "US"):             41912,
+    ("soybeans",    "Brazil"):        115000,
+    ("soybeans",    "Argentina"):       4600,
+    ("soybeans",    "TotalNonUS"):    119600,   # Brazil + Argentina
+    ("soybeans",    "MajorExporter"): 161512,   # US + Brazil + Argentina
+    ("soybeanmeal", "US"):             17599,
+    ("soybeanmeal", "Brazil"):         25500,
+    ("soybeanmeal", "Argentina"):      29400,
+    ("soybeanmeal", "TotalNonUS"):     54900,   # Brazil + Argentina
+    ("soybeanmeal", "MajorExporter"):  72499,   # US + Brazil + Argentina
+    ("wheat",       "US"):             24494,
+    ("wheat",       "Canada"):         29000,
+    ("wheat",       "EU"):             30500,
+    ("wheat",       "Russia"):         44500,
+    ("wheat",       "Ukraine"):        12500,
+    ("wheat",       "Argentina"):      19500,
+    ("wheat",       "Australia"):      26500,
 }
-
-# Marketing year start month (month ≥ this → MY = calendar year)
-_PSD_MY_START = {
-    "corn":        10,
-    "soybeans":    10,
-    "soybeanmeal": 10,
-    "wheat":        7,
-}
-
-# Dashboard field → PSD country name(s) to match (lowercase)
-_PSD_FIELD_NAMES = {
-    "US":        ["united states"],
-    "Brazil":    ["brazil"],
-    "Argentina": ["argentina"],
-    "Ukraine":   ["ukraine"],
-    "Canada":    ["canada"],
-    "Russia":    ["russia"],
-    "EU":        ["european union", "eu-27", "eu 27"],
-    "Australia": ["australia"],
-}
-
-# Non-US and Major-Exporter component lists per commodity
-_PSD_NON_US_COMPS = {
-    "corn":        ["Brazil", "Argentina", "Ukraine"],
-    "soybeans":    ["Brazil", "Argentina"],
-    "soybeanmeal": ["Brazil", "Argentina"],
-    "wheat":       ["Canada", "Russia", "EU", "Ukraine", "Argentina", "Australia"],
-}
-_PSD_MAJOR_COMPS = {
-    "corn":        ["US", "Brazil", "Argentina", "Ukraine"],
-    "soybeans":    ["US", "Brazil", "Argentina"],
-    "soybeanmeal": ["US", "Brazil", "Argentina"],
-}
-
-# Static fallback — used only when the PSD API is unreachable.
-# Update these after each WASDE release as a backup, but the live pull takes priority.
-_FORECAST_CONFIG_FALLBACK = {
-    ("corn",        "US"):            55000,
-    ("corn",        "Brazil"):        43000,
-    ("corn",        "Argentina"):     37000,
-    ("corn",        "Ukraine"):       22000,
-    ("soybeans",    "US"):            41912,
-    ("soybeans",    "Brazil"):       115000,
-    ("soybeans",    "Argentina"):      4600,
-    ("soybeanmeal", "US"):            17599,
-    ("soybeanmeal", "Brazil"):        25500,
-    ("soybeanmeal", "Argentina"):     29400,
-    ("wheat",       "US"):            24494,
-    ("wheat",       "Canada"):        29000,
-    ("wheat",       "EU"):            30500,
-    ("wheat",       "Russia"):        44500,
-    ("wheat",       "Ukraine"):       12500,
-    ("wheat",       "Argentina"):     19500,
-    ("wheat",       "Australia"):     26500,
-}
-
-
-
-# Hardcoded PSD country codes — avoids the /country lookup call which is unreliable.
-# These are the authoritative USDA FAS PSD countryCode values for each dashboard field.
-_PSD_HARDCODED_CODES = {
-    "US":        "US",
-    "Brazil":    "BR",
-    "Argentina": "AR",
-    "Ukraine":   "UA",
-    "Canada":    "CA",
-    "Russia":    "RS",
-    "EU":        "E2",   # PSD uses "E2" for EU-27
-    "Australia": "AS",
-}
-
-_PSD_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; JSA-Dashboard/1.0)",
-    "Accept":     "application/json",
-}
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _load_wasde_forecasts() -> tuple:
-    """
-    Pull current-MY export forecasts from USDA FAS PSD (attribute 88).
-    Returns (forecast_dict, source_str) where source is 'live' or 'fallback:…'.
-    Strategy: skip the /country lookup (unreliable) and use hardcoded PSD codes.
-    """
-    now = datetime.now()
-    result: dict = {}
-
-    # Build field → country-code map from hardcoded values (no API call needed)
-    field_codes = dict(_PSD_HARDCODED_CODES)
-
-    # Try to enrich from the /country endpoint, but don't fail if it's down
-    try:
-        _r = _requests.get(f"{_PSD_BASE}/country", headers=_PSD_HEADERS, timeout=12)
-        if _r.ok:
-            for c in _r.json():
-                name = c.get("countryName", "").strip().lower()
-                code = c.get("countryCode", "")
-                for field, names in _PSD_FIELD_NAMES.items():
-                    if name in names and field not in field_codes:
-                        field_codes[field] = code
-    except Exception:
-        pass  # keep hardcoded codes; continue to data fetch
-
-    try:
-        for comm, psd_code in _PSD_COMMODITY_CODES.items():
-            start_month = _PSD_MY_START[comm]
-            my = now.year if now.month >= start_month else now.year - 1
-
-            params = {
-                "commodityCode": psd_code,
-                "marketYear":    my,
-                "attributeId":   88,
-            }
-            resp = _requests.get(
-                f"{_PSD_BASE}/data/get",
-                params=params,
-                headers=_PSD_HEADERS,
-                timeout=25,
-            )
-            resp.raise_for_status()
-            rows = resp.json()
-
-            # Latest value per countryCode (take max across calendar years if multiple)
-            country_vals: dict = {}
-            for row in rows:
-                code = row.get("countryCode", "")
-                val  = float(row.get("value") or 0)
-                if code not in country_vals or val > country_vals[code]:
-                    country_vals[code] = val
-
-            for field, code in field_codes.items():
-                if code in country_vals and country_vals[code] > 0:
-                    result[(comm, field)] = country_vals[code]
-
-            non_us_total = sum(
-                result.get((comm, f), 0) for f in _PSD_NON_US_COMPS.get(comm, [])
-            )
-            if non_us_total > 0:
-                result[(comm, "TotalNonUS")] = non_us_total
-
-            major_total = sum(
-                result.get((comm, f), 0) for f in _PSD_MAJOR_COMPS.get(comm, [])
-            )
-            if major_total > 0:
-                result[(comm, "MajorExporter")] = major_total
-
-    except Exception as _e:
-        merged = dict(_FORECAST_CONFIG_FALLBACK)
-        return merged, f"fallback:{_e}"
-
-    merged = dict(_FORECAST_CONFIG_FALLBACK)
-    merged.update(result)
-    return merged, "live"
 
 
 def load_forecast_config() -> dict:
-    data, _ = _load_wasde_forecasts()
-    return data
+    return dict(_FORECAST_CONFIG)
 
 
 def _wasde_api_source() -> str:
-    """Returns 'live' or 'fallback:<reason>' — used to surface API-down warnings."""
-    _, src = _load_wasde_forecasts()
-    return src
+    return "static"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2865,15 +2728,7 @@ def _run_commodity_tab(commodity: str, use_bushels: bool,
     # Use only the most recent 5 complete years so share distributions reflect
     # current competitive dynamics rather than older export patterns.
     forecast_cfg    = load_forecast_config()
-    _wasde_src = _wasde_api_source()
-    if _wasde_src.startswith("fallback"):
-        _err = _wasde_src.split(":", 1)[1] if ":" in _wasde_src else "unknown error"
-        st.warning(
-            f"⚠️ **USDA FAS PSD API is unreachable** — forecast values are using "
-            f"the last-known static fallback and may not reflect the latest WASDE. "
-            f"Error: `{_err}`",
-            icon="🌐",
-        )
+    st.caption(f"📋 WASDE export forecasts: **{_WASDE_AS_OF}** — update `_FORECAST_CONFIG` in code after each monthly WASDE release.")
     _share_years    = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares          = _compute_seasonal_shares(monthly_pivot, _share_years, months)
 
@@ -3553,15 +3408,7 @@ def _run_wheat_tab(use_bushels: bool, unit_short: str,
     # ── Forecast seasonal shares ──────────────────────────────────────────
     # Limit to recent 5 complete years for share computation.
     forecast_cfg    = load_forecast_config()
-    _wasde_src_w = _wasde_api_source()
-    if _wasde_src_w.startswith("fallback"):
-        _err_w = _wasde_src_w.split(":", 1)[1] if ":" in _wasde_src_w else "unknown error"
-        st.warning(
-            f"⚠️ **USDA FAS PSD API is unreachable** — forecast values are using "
-            f"the last-known static fallback and may not reflect the latest WASDE. "
-            f"Error: `{_err_w}`",
-            icon="🌐",
-        )
+    st.caption(f"📋 WASDE export forecasts: **{_WASDE_AS_OF}** — update `_FORECAST_CONFIG` in code after each monthly WASDE release.")
     _usda_saved_w   = forecast_cfg.get(("wheat", field))
     _share_years_w  = sorted(complete_years)[-5:] if len(complete_years) >= 5 else complete_years
     shares_w        = _compute_seasonal_shares(monthly_pivot, _share_years_w, months)
